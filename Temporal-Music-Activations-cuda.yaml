@@ -1,0 +1,50 @@
+name: temporal-music-activations-cuda
+channels:
+  - pytorch
+  - nvidia
+  - conda-forge
+  - defaults
+
+dependencies:
+  - python=3.12
+  - pip
+
+  # Core scientific stack
+  - numpy
+  - pandas
+  - scipy
+  - scikit-learn
+  - matplotlib
+  - seaborn
+  - tqdm
+  - pyyaml
+
+  # Audio stack
+  - librosa
+  - pysoundfile
+  - ffmpeg
+
+  # PyTorch + CUDA runtime (12.1)
+  - pytorch
+  - torchaudio
+  - pytorch-cuda=12.1
+
+  # Pip-only LLM/HF stack
+  - pip:
+      - transformers
+      - tokenizers
+      - sentencepiece
+      - datasets
+      - accelerate
+      - peft
+      - evaluate
+      - safetensors
+      - huggingface_hub
+      - wandb
+      - einops
+      - omegaconf
+      - bitsandbytes
+
+# Usage:
+# conda env create -f Temporal-Music-Activations-cuda.yaml
+# conda activate temporal-music-activations-cuda

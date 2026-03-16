@@ -1,0 +1,47 @@
+name: temporal-music-activations-apple
+channels:
+  - pytorch
+  - conda-forge
+  - defaults
+
+dependencies:
+  - python=3.12
+  - pip
+
+  # Core scientific stack
+  - numpy
+  - pandas
+  - scipy
+  - scikit-learn
+  - matplotlib
+  - seaborn
+  - tqdm
+  - pyyaml
+
+  # Audio stack
+  - librosa
+  - pysoundfile
+  - ffmpeg
+
+  # PyTorch on Apple Silicon (MPS backend available via macOS Metal)
+  - pytorch
+  - torchaudio
+
+  # Pip-only LLM/HF stack
+  - pip:
+      - transformers
+      - tokenizers
+      - sentencepiece
+      - datasets
+      - accelerate
+      - peft
+      - evaluate
+      - safetensors
+      - huggingface_hub
+      - wandb
+      - einops
+      - omegaconf
+
+# Usage:
+# conda env create -f Temporal-Music-Activations-apple.yaml
+# conda activate temporal-music-activations-apple
