@@ -4,13 +4,13 @@ set -euo pipefail
 # Quick launcher for Temporal-Music-Activations/TrainNewSAE.py
 #
 # Usage examples:
-#   Scripts/run_train_sae.sh Data/Models/features Output/sae
-#   Scripts/run_train_sae.sh Data/Models/features Output/sae --epochs 20 --batch_size 16 --device cpu
+#   Scripts/TrainingScripts/run_train_sae.sh Data/Models/features Output/sae
+#   Scripts/TrainingScripts/run_train_sae.sh Data/Models/features Output/sae --epochs 20 --batch_size 16 --device cpu
 
 if [[ "${1:-}" == "-h" || "${1:-}" == "--help" || "$#" -lt 2 ]]; then
   cat <<'EOF'
 Usage:
-  Scripts/run_train_sae.sh <data_dir> <output_dir> [extra training args]
+  Scripts/TrainingScripts/run_train_sae.sh <data_dir> <output_dir> [extra training args]
 
 Required:
   <data_dir>    Folder containing .pt or .npy feature tensors
@@ -18,8 +18,8 @@ Required:
 
 Optional extra args are forwarded directly to TrainNewSAE.py.
 Examples:
-  Scripts/run_train_sae.sh Data/Models/features Output/sae
-  Scripts/run_train_sae.sh Data/Models/features Output/sae --epochs 20 --batch_size 16 --device cpu
+  Scripts/TrainingScripts/run_train_sae.sh Data/Models/features Output/sae
+  Scripts/TrainingScripts/run_train_sae.sh Data/Models/features Output/sae --epochs 20 --batch_size 16 --device cpu
 EOF
   exit 0
 fi
@@ -28,7 +28,7 @@ DATA_DIR="$1"
 OUTPUT_DIR="$2"
 shift 2
 
-ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+ROOT_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 TRAIN_SCRIPT="$ROOT_DIR/Temporal-Music-Activations/TrainNewSAE.py"
 
 if [[ ! -f "$TRAIN_SCRIPT" ]]; then
