@@ -1,0 +1,7 @@
+# MTG-Jamendo metadata URL list
+# One URL per line. Lines starting with # are ignored.
+# Replace these placeholders with official metadata/split URLs.
+
+https://example.com/mtg-jamendo/train.tsv
+https://example.com/mtg-jamendo/validation.tsv
+https://example.com/mtg-jamendo/test.tsv
