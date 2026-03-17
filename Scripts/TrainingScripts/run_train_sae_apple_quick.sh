@@ -40,7 +40,17 @@ if [[ ! -f "$TRAIN_SCRIPT" ]]; then
   exit 1
 fi
 
-python "$TRAIN_SCRIPT" \
+if [[ -n "${TEMPORAL_MUSIC_ACTIVATIONS_PYTHON:-}" ]]; then
+  PYTHON_CMD=("$TEMPORAL_MUSIC_ACTIVATIONS_PYTHON")
+elif conda env list | grep -q '^temporal-music-activations-apple '; then
+  PYTHON_CMD=(conda run -n temporal-music-activations-apple python)
+else
+  PYTHON_CMD=(python)
+fi
+
+cd "$ROOT_DIR"
+
+"${PYTHON_CMD[@]}" "$TRAIN_SCRIPT" \
   --data_dir "$DATA_DIR" \
   --output_dir "$OUTPUT_DIR" \
   --device mps \

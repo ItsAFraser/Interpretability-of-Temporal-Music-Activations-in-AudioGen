@@ -4,7 +4,7 @@ This script is intended to train a new Sparse Autoencoder (SAE) on longer audio 
 Usage:
     python TrainNewSAE.py --data_dir /path/to/full_length_tracks --output_dir /path/to/save_model
 Arguments:
-    --data_dir: Directory containing the full-length audio tracks for training.
+    --data_dir: Directory containing precomputed MusicGen feature tensors for training.
     --output_dir: Directory where the trained SAE model will be saved.  
     --epochs: Number of training epochs.
     --batch_size: Batch size for training.
@@ -17,6 +17,9 @@ Arguments:
     --seed: Random seed for reproducibility.
     --resume: Path to a checkpoint to resume training from.
     --checkpoint_interval: Interval (in epochs) at which to save model checkpoints.
+    --sample_mode: 'frames' keeps timestep vectors; 'mean' averages each track first.
+    --frame_stride: Use every Nth timestep when sample_mode='frames'.
+    --max_frames: Optional cap on total timestep samples.
     --verbose: If set, print detailed training progress.
 '''
 import argparse
@@ -30,7 +33,7 @@ class TrainNewSAE:
     def __init__(self, data_dir, output_dir, epochs=100, batch_size=32, learning_rate=1e-3,
                  latent_dim=128, sparsity_weight=1e-5, sparsity_target=0.05, log_interval=10,
                  device='cuda', seed=42, resume=None, checkpoint_interval=10, max_samples=0,
-                 verbose=False):
+                 sample_mode='frames', frame_stride=1, max_frames=0, verbose=False):
         self.data_dir = data_dir
         self.output_dir = output_dir
         self.epochs = epochs
@@ -45,6 +48,9 @@ class TrainNewSAE:
         self.resume = resume
         self.checkpoint_interval = checkpoint_interval
         self.max_samples = max_samples
+        self.sample_mode = sample_mode
+        self.frame_stride = frame_stride
+        self.max_frames = max_frames
         self.verbose = verbose
 
     def _save_checkpoint(self, model, optimizer, epoch, filename):
@@ -85,9 +91,18 @@ class TrainNewSAE:
         os.makedirs(self.output_dir, exist_ok=True)
         
         # Load dataset and create DataLoader
-        dataset = FullLengthAudioDataset(self.data_dir, max_samples=self.max_samples)
+        dataset = FullLengthAudioDataset(
+            self.data_dir,
+            max_samples=self.max_samples,
+            sample_mode=self.sample_mode,
+            frame_stride=self.frame_stride,
+            max_frames=self.max_frames,
+        )
         dataloader = DataLoader(dataset, batch_size=self.batch_size, shuffle=True)
-        print(f"Loaded {len(dataset)} samples from {self.data_dir}")
+        print(
+            f"Loaded {len(dataset)} training samples from {self.data_dir} "
+            f"(sample_mode={self.sample_mode}, input_dim={dataset.input_dim})"
+        )
         
         # Initialize SAE model and optimizer
         model = SparseAutoencoder(input_dim=dataset.input_dim, latent_dim=self.latent_dim).to(self.device)
@@ -156,7 +171,7 @@ class TrainNewSAE:
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Train a Sparse Autoencoder on full-length audio tracks.")
-    parser.add_argument('--data_dir', type=str, required=True, help='Directory containing training audio data.')
+    parser.add_argument('--data_dir', type=str, required=True, help='Directory containing training feature tensors.')
     parser.add_argument('--output_dir', type=str, required=True, help='Directory to save model checkpoints.')
     parser.add_argument('--epochs', type=int, default=100, help='Number of training epochs.')
     parser.add_argument('--batch_size', type=int, default=32, help='Batch size for training.')
@@ -169,7 +184,10 @@ def parse_args():
     parser.add_argument('--seed', type=int, default=42, help='Random seed.')
     parser.add_argument('--resume', type=str, default=None, help='Path to checkpoint for resuming training.')
     parser.add_argument('--checkpoint_interval', type=int, default=10, help='Save checkpoint every N epochs.')
-    parser.add_argument('--max_samples', type=int, default=0, help='Limit training set size for quick runs.')
+    parser.add_argument('--max_samples', type=int, default=0, help='Limit the number of feature files for quick runs.')
+    parser.add_argument('--sample_mode', type=str, default='frames', choices=['frames', 'mean'], help='Use every timestep vector or mean-pool each track before training.')
+    parser.add_argument('--frame_stride', type=int, default=1, help='Use every Nth timestep when sample_mode=frames.')
+    parser.add_argument('--max_frames', type=int, default=0, help='Optional cap on total timestep samples when sample_mode=frames.')
     parser.add_argument('--verbose', action='store_true', help='Enable detailed per-batch logging.')
     return parser.parse_args()
 
@@ -191,6 +209,9 @@ def main():
         resume=args.resume,
         checkpoint_interval=args.checkpoint_interval,
         max_samples=args.max_samples,
+        sample_mode=args.sample_mode,
+        frame_stride=args.frame_stride,
+        max_frames=args.max_frames,
         verbose=args.verbose,
     )
     trainer.train()

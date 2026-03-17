@@ -10,7 +10,7 @@ dependencies:
   - pip
 
   # Core scientific stack
-  - numpy
+  - numpy<2
   - pandas
   - scipy
   - scikit-learn
@@ -31,7 +31,7 @@ dependencies:
 
   # Pip-only LLM/HF stack
   - pip:
-      - transformers
+      - transformers==4.46.3
       - tokenizers
       - sentencepiece
       - datasets

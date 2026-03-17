@@ -56,6 +56,35 @@ for activation extraction we can follow the same process that Nikhil Singh did [
 
 then we can take the retrained (or new SAE) and encode each activation  vector to get the sparse feature activations for every time step. this will result in a matrix for each track [num_features × num_timesteps] rather than a single vector.
 
+### Current Workflow in This Repo
+
+1. Extract MusicGen decoder residual features from audio into `Data/Models/features`.
+2. Train the SAE on timestep vectors with `--sample_mode frames` so time is not averaged away before training.
+3. Re-run the trained SAE over full per-track feature sequences to obtain sparse activations for temporal analysis.
+
+Example extraction command:
+
+```bash
+Scripts/TrainingScripts/run_extract_musicgen_features.sh \
+    /Volumes/SSD_ALF/DataSets/MTG-Jamendo/Data/raw/raw_30s_audio_low \
+    Data/Models/features \
+    --max_files 16 \
+    --max_duration_sec 30 \
+    --decoder_layer -1 \
+    --metadata_json
+```
+
+Example SAE training command without temporal averaging:
+
+```bash
+Scripts/TrainingScripts/run_train_sae_apple_quick.sh \
+    Data/Models/features \
+    Output/sae-quick-smoke \
+    --sample_mode frames \
+    --frame_stride 4 \
+    --max_frames 4096
+```
+
 **Analysis (Core Contribution):**
 
 the goal is to characterize the shape of these time series and cluster features based on their temporal behavior.

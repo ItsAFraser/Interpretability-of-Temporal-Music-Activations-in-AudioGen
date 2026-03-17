@@ -1,5 +1,5 @@
 import os
-from typing import List
+from typing import List, Sequence, Tuple
 
 import numpy as np
 import torch
@@ -12,11 +12,27 @@ class FullLengthAudioDataset(Dataset):
     Expected layout:
     - data_dir can contain files directly or in subdirectories.
     - each sample file should contain either a 1D tensor [D] or 2D tensor [T, D].
-    - 2D tensors are reduced to a single vector by averaging over time.
+
+    Sampling modes:
+    - mean: each file is one sample; temporal tensors [T, D] are reduced to [D]
+    - frames: each timestep in a temporal tensor becomes an individual sample [D]
+
+    The default frame-based mode preserves temporal structure during SAE training,
+    while still allowing explicit mean pooling when that is desired.
     """
 
-    def __init__(self, data_dir: str, max_samples: int = 0):
+    def __init__(
+        self,
+        data_dir: str,
+        max_samples: int = 0,
+        sample_mode: str = "frames",
+        frame_stride: int = 1,
+        max_frames: int = 0,
+    ):
         self.data_dir = data_dir
+        self.sample_mode = sample_mode
+        self.frame_stride = max(1, int(frame_stride))
+        self.max_frames = max(0, int(max_frames))
         self.files = self._collect_files(data_dir)
         if max_samples and max_samples > 0:
             self.files = self.files[:max_samples]
@@ -26,8 +42,21 @@ class FullLengthAudioDataset(Dataset):
                 "Place precomputed feature tensors there before training."
             )
 
+        if self.sample_mode not in {"mean", "frames"}:
+            raise ValueError(
+                f"Unsupported sample_mode={self.sample_mode!r}. Use 'mean' or 'frames'."
+            )
+
         sample = self._load_tensor(self.files[0])
         self.input_dim = int(sample.shape[-1])
+        self.frame_index: List[Tuple[int, int]] = []
+        if self.sample_mode == "frames":
+            self.frame_index = self._build_frame_index()
+            if not self.frame_index:
+                raise ValueError(
+                    f"No frame samples found under: {data_dir}. "
+                    "Ensure tensors are 1D or 2D with a non-zero time dimension."
+                )
 
     def _collect_files(self, root: str) -> List[str]:
         files: List[str] = []
@@ -52,19 +81,67 @@ class FullLengthAudioDataset(Dataset):
         if tensor.ndim == 1:
             return tensor
         if tensor.ndim == 2:
-            return tensor.mean(dim=0)
+            return tensor
 
-        # Collapse unexpected higher-rank tensors to the last feature axis.
-        return tensor.reshape(-1, tensor.shape[-1]).mean(dim=0)
+        # Collapse unexpected higher-rank tensors into a temporal matrix [T, D].
+        return tensor.reshape(-1, tensor.shape[-1])
+
+    def _normalize_temporal_tensor(self, tensor: torch.Tensor) -> torch.Tensor:
+        """Convert supported inputs to either [D] or [T, D]."""
+        if tensor.ndim == 1:
+            return tensor
+        if tensor.ndim == 2:
+            return tensor
+        return tensor.reshape(-1, tensor.shape[-1])
+
+    def _build_frame_index(self) -> List[Tuple[int, int]]:
+        """Map dataset indices to (file_index, frame_index) pairs.
+
+        This lets the SAE train directly on timestep vectors instead of averaging
+        away the temporal dimension before the model sees the data.
+        """
+        frame_index: List[Tuple[int, int]] = []
+        for file_idx, path in enumerate(self.files):
+            tensor = self._normalize_temporal_tensor(self._load_tensor(path))
+            if tensor.ndim == 1:
+                frame_index.append((file_idx, 0))
+                continue
+
+            num_frames = tensor.shape[0]
+            for frame_idx in range(0, num_frames, self.frame_stride):
+                frame_index.append((file_idx, frame_idx))
+                if self.max_frames and len(frame_index) >= self.max_frames:
+                    return frame_index
+        return frame_index
+
+    def _get_frame_sample(self, file_idx: int, frame_idx: int) -> torch.Tensor:
+        tensor = self._normalize_temporal_tensor(self._load_tensor(self.files[file_idx]))
+        if tensor.ndim == 1:
+            return tensor
+        if frame_idx >= tensor.shape[0]:
+            raise IndexError(
+                f"Frame index {frame_idx} out of range for {self.files[file_idx]} "
+                f"with {tensor.shape[0]} frames"
+            )
+        return tensor[frame_idx]
 
     def __len__(self) -> int:
+        if self.sample_mode == "frames":
+            return len(self.frame_index)
         return len(self.files)
 
     def __getitem__(self, idx: int) -> torch.Tensor:
-        tensor = self._load_tensor(self.files[idx])
+        if self.sample_mode == "frames":
+            file_idx, frame_idx = self.frame_index[idx]
+            tensor = self._get_frame_sample(file_idx, frame_idx)
+        else:
+            tensor = self._normalize_temporal_tensor(self._load_tensor(self.files[idx]))
+            if tensor.ndim == 2:
+                tensor = tensor.mean(dim=0)
+
         if tensor.shape[-1] != self.input_dim:
             raise ValueError(
-                f"Feature size mismatch in {self.files[idx]}: "
+                f"Feature size mismatch for sample index {idx}: "
                 f"expected {self.input_dim}, got {tensor.shape[-1]}"
             )
         return tensor
