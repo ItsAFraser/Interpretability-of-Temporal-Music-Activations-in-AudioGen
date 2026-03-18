@@ -17,13 +17,13 @@ Defaults optimized for quick Apple Silicon testing:
   --epochs 2
   --batch_size 8
   --latent_dim 64
-  --max_samples 128
+  --max_files 128
   --checkpoint_interval 1
   --log_interval 5
 
 Examples:
   Scripts/TrainingScripts/run_train_sae_apple_quick.sh Data/Models/features Output/sae-quick
-  Scripts/TrainingScripts/run_train_sae_apple_quick.sh Data/Models/features Output/sae-quick --max_samples 256 --epochs 3
+  Scripts/TrainingScripts/run_train_sae_apple_quick.sh Data/Models/features Output/sae-quick --max_files 256 --epochs 3
 EOF
   exit 0
 fi
@@ -57,7 +57,7 @@ cd "$ROOT_DIR"
   --epochs 2 \
   --batch_size 8 \
   --latent_dim 64 \
-  --max_samples 128 \
+  --max_files 128 \
   --checkpoint_interval 1 \
   --log_interval 5 \
   --verbose \

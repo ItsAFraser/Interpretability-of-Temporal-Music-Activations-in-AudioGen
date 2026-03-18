@@ -70,9 +70,16 @@ Scripts/TrainingScripts/run_extract_musicgen_features.sh \
     Data/Models/features \
     --max_files 16 \
     --max_duration_sec 30 \
-    --decoder_layer -1 \
+    --decoder_layers 0,8,16,-1 \
     --metadata_json
 ```
+
+This command writes separate outputs per layer under:
+
+- `Data/Models/features/layer_00/...`
+- `Data/Models/features/layer_08/...`
+- `Data/Models/features/layer_16/...`
+- `Data/Models/features/layer_final/...`
 
 Example SAE training command without temporal averaging:
 

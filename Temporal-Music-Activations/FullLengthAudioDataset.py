@@ -24,7 +24,7 @@ class FullLengthAudioDataset(Dataset):
     def __init__(
         self,
         data_dir: str,
-        max_samples: int = 0,
+        max_files: int = 0,
         sample_mode: str = "frames",
         frame_stride: int = 1,
         max_frames: int = 0,
@@ -34,8 +34,8 @@ class FullLengthAudioDataset(Dataset):
         self.frame_stride = max(1, int(frame_stride))
         self.max_frames = max(0, int(max_frames))
         self.files = self._collect_files(data_dir)
-        if max_samples and max_samples > 0:
-            self.files = self.files[:max_samples]
+        if max_files and max_files > 0:
+            self.files = self.files[:max_files]
         if not self.files:
             raise ValueError(
                 f"No .pt or .npy files found under: {data_dir}. "
@@ -70,7 +70,7 @@ class FullLengthAudioDataset(Dataset):
 
     def _load_tensor(self, path: str) -> torch.Tensor:
         if path.lower().endswith(".pt"):
-            tensor = torch.load(path, map_location="cpu")
+            tensor = torch.load(path, map_location="cpu", weights_only=True)
             if not isinstance(tensor, torch.Tensor):
                 raise ValueError(f"Expected torch.Tensor in {path}, got {type(tensor)}")
         else:
@@ -102,17 +102,30 @@ class FullLengthAudioDataset(Dataset):
         """
         frame_index: List[Tuple[int, int]] = []
         for file_idx, path in enumerate(self.files):
-            tensor = self._normalize_temporal_tensor(self._load_tensor(path))
-            if tensor.ndim == 1:
+            num_frames = self._get_num_frames(path)
+            if num_frames == 1:
                 frame_index.append((file_idx, 0))
                 continue
-
-            num_frames = tensor.shape[0]
             for frame_idx in range(0, num_frames, self.frame_stride):
                 frame_index.append((file_idx, frame_idx))
                 if self.max_frames and len(frame_index) >= self.max_frames:
                     return frame_index
         return frame_index
+
+    def _get_num_frames(self, path: str) -> int:
+        """Return the number of timestep frames in a feature file.
+
+        For .npy files, uses a memory-mapped open so only the array header is
+        read from disk — the data pages are never faulted in.  This makes index
+        construction O(num_files) in metadata I/O rather than O(total_bytes).
+        For .pt files a full load is unavoidable (PyTorch has no header-only API).
+        """
+        if path.lower().endswith(".npy"):
+            arr = np.load(path, mmap_mode="r")
+            return 1 if arr.ndim == 1 else int(arr.shape[0])
+        # .pt path: load once and discard data immediately
+        tensor = self._normalize_temporal_tensor(self._load_tensor(path))
+        return 1 if tensor.ndim == 1 else int(tensor.shape[0])
 
     def _get_frame_sample(self, file_idx: int, frame_idx: int) -> torch.Tensor:
         tensor = self._normalize_temporal_tensor(self._load_tensor(self.files[file_idx]))

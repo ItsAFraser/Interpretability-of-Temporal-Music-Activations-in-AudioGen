@@ -13,7 +13,7 @@ Usage:
 
 Examples:
   Scripts/TrainingScripts/run_extract_musicgen_features.sh /Volumes/SSD_ALF/DataSets/MTG-Jamendo/Data/raw/raw_30s_audio_low Data/Models/features
-  Scripts/TrainingScripts/run_extract_musicgen_features.sh /Volumes/SSD_ALF/DataSets/MTG-Jamendo/Data/raw/raw_30s_audio_low Data/Models/features --max_files 16 --max_duration_sec 30 --decoder_layer -1
+  Scripts/TrainingScripts/run_extract_musicgen_features.sh /Volumes/SSD_ALF/DataSets/MTG-Jamendo/Data/raw/raw_30s_audio_low Data/Models/features --max_files 16 --max_duration_sec 30 --decoder_layers 0,8,16,-1
 EOF
   exit 0
 fi

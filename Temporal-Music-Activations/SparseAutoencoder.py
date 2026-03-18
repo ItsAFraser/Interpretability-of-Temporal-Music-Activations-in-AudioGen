@@ -17,6 +17,19 @@ class SparseAutoencoder(nn.Module):
         nn.init.xavier_uniform_(self.decoder.weight)
         nn.init.zeros_(self.decoder.bias)
 
+    def normalize_decoder(self) -> None:
+        """Project decoder columns to unit L2 norm (in-place, no grad).
+
+        Call this after every optimizer step to prevent the model from trivially
+        reducing reconstruction loss by shrinking encoder weights and inflating
+        decoder columns, which defeats sparsity regularisation.
+        """
+        with torch.no_grad():
+            # decoder.weight shape: [input_dim, latent_dim]
+            # Each column j corresponds to the j-th latent feature's dictionary vector.
+            norms = self.decoder.weight.norm(dim=0, keepdim=True).clamp(min=1e-8)
+            self.decoder.weight.div_(norms)
+
     def forward(self, x: torch.Tensor):
         latent_pre = self.encoder(x)
         latent = self.activation(latent_pre)

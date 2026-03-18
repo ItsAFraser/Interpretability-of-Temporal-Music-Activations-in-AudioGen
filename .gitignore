@@ -2,3 +2,6 @@ __pycache__/
 *.pt
 *.json
 *.npy
+*.png
+*.log
+*.csv

@@ -24,6 +24,10 @@ dependencies:
   - pysoundfile
   - ffmpeg
 
+    # Notebook support
+    - ipykernel
+    - jupyterlab
+
   # PyTorch + CUDA runtime (12.1)
   - pytorch
   - torchaudio

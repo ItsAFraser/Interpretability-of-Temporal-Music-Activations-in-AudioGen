@@ -23,7 +23,9 @@ Arguments:
     --verbose: If set, print detailed training progress.
 '''
 import argparse
+import csv
 import os
+from datetime import datetime
 import torch
 from torch.utils.data import DataLoader
 from FullLengthAudioDataset import FullLengthAudioDataset
@@ -32,8 +34,8 @@ from SparseAutoencoder import SparseAutoencoder
 class TrainNewSAE:
     def __init__(self, data_dir, output_dir, epochs=100, batch_size=32, learning_rate=1e-3,
                  latent_dim=128, sparsity_weight=1e-5, sparsity_target=0.05, log_interval=10,
-                 device='cuda', seed=42, resume=None, checkpoint_interval=10, max_samples=0,
-                 sample_mode='frames', frame_stride=1, max_frames=0, verbose=False):
+                 device='cuda', seed=42, resume=None, checkpoint_interval=10, max_files=0,
+                 sample_mode='frames', frame_stride=1, max_frames=0, metrics_filename='training_metrics.csv', verbose=False):
         self.data_dir = data_dir
         self.output_dir = output_dir
         self.epochs = epochs
@@ -47,11 +49,43 @@ class TrainNewSAE:
         self.seed = seed
         self.resume = resume
         self.checkpoint_interval = checkpoint_interval
-        self.max_samples = max_samples
+        self.max_files = max_files
         self.sample_mode = sample_mode
         self.frame_stride = frame_stride
         self.max_frames = max_frames
+        self.metrics_filename = metrics_filename
+        self.metrics_path = os.path.join(self.output_dir, self.metrics_filename)
         self.verbose = verbose
+
+    def _init_metrics_log(self, append=False):
+        """Create metrics CSV with header (or append if resuming and file exists)."""
+        os.makedirs(self.output_dir, exist_ok=True)
+        file_exists = os.path.exists(self.metrics_path)
+        mode = 'a' if append and file_exists else 'w'
+        with open(self.metrics_path, mode, newline='') as f:
+            writer = csv.writer(f)
+            if mode == 'w':
+                writer.writerow([
+                    'timestamp',
+                    'epoch',
+                    'avg_loss',
+                    'avg_recon',
+                    'avg_sparsity',
+                    'num_batches',
+                ])
+
+    def _append_metrics_log(self, epoch, avg_loss, avg_recon, avg_sparsity, num_batches):
+        """Append one row of epoch-level metrics to CSV."""
+        with open(self.metrics_path, 'a', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow([
+                datetime.now().isoformat(timespec='seconds'),
+                epoch,
+                f"{avg_loss:.6f}",
+                f"{avg_recon:.6f}",
+                f"{avg_sparsity:.6f}",
+                num_batches,
+            ])
 
     def _save_checkpoint(self, model, optimizer, epoch, filename):
         os.makedirs(self.output_dir, exist_ok=True)
@@ -67,16 +101,27 @@ class TrainNewSAE:
         if self.verbose:
             print(f"Saved checkpoint: {checkpoint_path}")
 
-    def _compute_sparsity_penalty(self, latent_activations):
-        # Estimate feature firing probabilities in [0, 1] for KL sparsity.
-        rho_hat = torch.sigmoid(latent_activations).mean(dim=0)
-        rho_hat = torch.clamp(rho_hat, min=1e-6, max=1 - 1e-6)
-        rho = torch.full_like(rho_hat, fill_value=self.sparsity_target)
-        kl = rho * torch.log(rho / rho_hat) + (1 - rho) * torch.log((1 - rho) / (1 - rho_hat))
-        return torch.sum(kl)
+    def _compute_sparsity_penalty(self, latent_activations: torch.Tensor) -> torch.Tensor:
+        # L1 penalty on post-ReLU activations is the standard SAE sparsity regulariser.
+        # The previous KL formulation applied sigmoid() to post-ReLU values, which maps
+        # all activations to [0.5, 1] — making rho_hat always ≥ 0.5 regardless of the
+        # sparsity_target, so the KL penalty was incoherent throughout training.
+        # L1 (mean activation) is differentiable, scale-invariant, and widely used
+        # in mechanistic-interpretability SAE work (e.g. Anthropic, EleutherAI).
+        if latent_activations.ndim != 2:
+            raise ValueError(
+                f"_compute_sparsity_penalty expects a 2-D [batch, latent_dim] tensor, "
+                f"got shape {tuple(latent_activations.shape)}"
+            )
+        return latent_activations.mean()
         
     def train(self):
-        # Set random seed for reproducibility
+        # Set all random seeds for full reproducibility across torch, numpy, and
+        # Python's random module (the last is used by DataLoader shuffle).
+        import random
+        import numpy as np
+        random.seed(self.seed)
+        np.random.seed(self.seed)
         torch.manual_seed(self.seed)
 
         if self.device == 'cuda' and not torch.cuda.is_available():
@@ -93,7 +138,7 @@ class TrainNewSAE:
         # Load dataset and create DataLoader
         dataset = FullLengthAudioDataset(
             self.data_dir,
-            max_samples=self.max_samples,
+            max_files=self.max_files,
             sample_mode=self.sample_mode,
             frame_stride=self.frame_stride,
             max_frames=self.max_frames,
@@ -110,13 +155,25 @@ class TrainNewSAE:
         
         # Optionally resume from a checkpoint
         if self.resume:
-            checkpoint = torch.load(self.resume, map_location=self.device)
+            if not os.path.isfile(self.resume):
+                raise FileNotFoundError(f"Resume checkpoint not found: {self.resume}")
+            checkpoint = torch.load(self.resume, map_location=self.device, weights_only=False)
+            if 'model_state_dict' not in checkpoint or 'optimizer_state_dict' not in checkpoint:
+                raise KeyError(
+                    f"Checkpoint {self.resume} is missing required keys "
+                    "('model_state_dict', 'optimizer_state_dict')."
+                )
             model.load_state_dict(checkpoint['model_state_dict'])
             optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
             start_epoch = checkpoint['epoch'] + 1
             print(f"Resuming training from epoch {start_epoch}")
         else:
             start_epoch = 0
+
+        # Initialize epoch-level metrics CSV in output_dir.
+        self._init_metrics_log(append=(start_epoch > 0))
+        if self.verbose:
+            print(f"Writing training metrics to: {self.metrics_path}")
         
         # Training loop
         for epoch in range(start_epoch, self.epochs):
@@ -141,6 +198,9 @@ class TrainNewSAE:
 
                 loss.backward()
                 optimizer.step()
+                # Keep decoder columns at unit norm so the encoder is forced to
+                # be sparse rather than pushing magnitude into the decoder.
+                model.normalize_decoder()
 
                 total_loss += loss.item()
                 total_recon += recon_loss.item()
@@ -156,11 +216,22 @@ class TrainNewSAE:
                     )
 
             num_batches = max(len(dataloader), 1)
+            avg_loss = total_loss / num_batches
+            avg_recon = total_recon / num_batches
+            avg_sparsity = total_sparsity / num_batches
             print(
                 f"Epoch [{epoch + 1}/{self.epochs}] "
-                f"Avg Loss: {total_loss / num_batches:.6f} "
-                f"Avg Recon: {total_recon / num_batches:.6f} "
-                f"Avg Sparsity: {total_sparsity / num_batches:.6f}"
+                f"Avg Loss: {avg_loss:.6f} "
+                f"Avg Recon: {avg_recon:.6f} "
+                f"Avg Sparsity: {avg_sparsity:.6f}"
+            )
+
+            self._append_metrics_log(
+                epoch=epoch + 1,
+                avg_loss=avg_loss,
+                avg_recon=avg_recon,
+                avg_sparsity=avg_sparsity,
+                num_batches=num_batches,
             )
 
             if (epoch + 1) % self.checkpoint_interval == 0:
@@ -184,10 +255,11 @@ def parse_args():
     parser.add_argument('--seed', type=int, default=42, help='Random seed.')
     parser.add_argument('--resume', type=str, default=None, help='Path to checkpoint for resuming training.')
     parser.add_argument('--checkpoint_interval', type=int, default=10, help='Save checkpoint every N epochs.')
-    parser.add_argument('--max_samples', type=int, default=0, help='Limit the number of feature files for quick runs.')
+    parser.add_argument('--max_files', type=int, default=0, help='Limit the number of feature files loaded for quick runs (0 = no limit).')
     parser.add_argument('--sample_mode', type=str, default='frames', choices=['frames', 'mean'], help='Use every timestep vector or mean-pool each track before training.')
     parser.add_argument('--frame_stride', type=int, default=1, help='Use every Nth timestep when sample_mode=frames.')
     parser.add_argument('--max_frames', type=int, default=0, help='Optional cap on total timestep samples when sample_mode=frames.')
+    parser.add_argument('--metrics_filename', type=str, default='training_metrics.csv', help='CSV filename for epoch-level training metrics in output_dir.')
     parser.add_argument('--verbose', action='store_true', help='Enable detailed per-batch logging.')
     return parser.parse_args()
 
@@ -208,10 +280,11 @@ def main():
         seed=args.seed,
         resume=args.resume,
         checkpoint_interval=args.checkpoint_interval,
-        max_samples=args.max_samples,
+        max_files=args.max_files,
         sample_mode=args.sample_mode,
         frame_stride=args.frame_stride,
         max_frames=args.max_frames,
+        metrics_filename=args.metrics_filename,
         verbose=args.verbose,
     )
     trainer.train()

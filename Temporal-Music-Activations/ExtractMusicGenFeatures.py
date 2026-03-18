@@ -55,7 +55,16 @@ def parse_args() -> argparse.Namespace:
         "--decoder_layer",
         type=int,
         default=-1,
-        help="0-based decoder transformer layer index. Use -1 for the final layer.",
+        help="Single decoder layer index. Kept for backward compatibility.",
+    )
+    parser.add_argument(
+        "--decoder_layers",
+        type=str,
+        default="",
+        help=(
+            "Optional comma-separated decoder layer list, e.g. '0,8,16,-1'. "
+            "When provided, extraction runs once per track and saves each selected layer."
+        ),
     )
     parser.add_argument(
         "--pooling",
@@ -133,14 +142,27 @@ def load_audio(path: Path, sample_rate: int, max_duration_sec: float) -> np.ndar
     return waveform.astype(np.float32, copy=False)
 
 
-def flatten_audio_codes(audio_codes: torch.LongTensor) -> torch.LongTensor:
-    """Convert EnCodec codes from [frames, batch, codebooks, steps] to [batch*codebooks, steps]."""
-    if audio_codes.ndim != 4:
-        raise ValueError(f"Expected audio_codes with 4 dims, got shape {tuple(audio_codes.shape)}")
+def flatten_audio_codes(audio_codes: torch.LongTensor) -> torch.Tensor:
+    """Convert EnCodec codes to [batch*codebooks, total_steps] for the MusicGen decoder.
 
-    num_frames, batch_size, num_codebooks, frame_length = audio_codes.shape
-    flattened = audio_codes.permute(1, 2, 0, 3).reshape(batch_size * num_codebooks, num_frames * frame_length)
-    return flattened
+    Handles two layouts emitted by different transformers versions:
+    - 3-D [batch, num_codebooks, seq_len]   — transformers >= ~4.40 (current)
+    - 4-D [frames, batch, codebooks, steps] — legacy layout
+    """
+    if audio_codes.ndim == 3:
+        # Current transformers: audio_codes shape is [batch, num_codebooks, seq_len]
+        batch_size, num_codebooks, seq_len = audio_codes.shape
+        return audio_codes.reshape(batch_size * num_codebooks, seq_len)
+    elif audio_codes.ndim == 4:
+        # Legacy layout: [frames, batch, codebooks, steps]
+        num_frames, batch_size, num_codebooks, frame_length = audio_codes.shape
+        return audio_codes.permute(1, 2, 0, 3).reshape(
+            batch_size * num_codebooks, num_frames * frame_length
+        )
+    else:
+        raise ValueError(
+            f"Expected audio_codes with 3 or 4 dims, got shape {tuple(audio_codes.shape)}"
+        )
 
 
 def get_unconditional_context(
@@ -209,6 +231,43 @@ def select_decoder_hidden_state(
     return decoder_hidden_states[hidden_state_index]
 
 
+def parse_requested_layers(decoder_layer: int, decoder_layers_arg: str) -> List[int]:
+    """Parse and normalize requested decoder layers.
+
+    We support both the original --decoder_layer flag and the new --decoder_layers
+    list flag. If the list flag is set, it takes precedence.
+    """
+    if decoder_layers_arg.strip():
+        layers: List[int] = []
+        for token in decoder_layers_arg.split(","):
+            token = token.strip()
+            if not token:
+                continue
+            layers.append(int(token))
+    else:
+        layers = [int(decoder_layer)]
+
+    # Preserve order while removing duplicates to avoid redundant writes.
+    seen = set()
+    normalized_layers: List[int] = []
+    for layer in layers:
+        if layer in seen:
+            continue
+        seen.add(layer)
+        normalized_layers.append(layer)
+
+    if not normalized_layers:
+        raise ValueError("No decoder layers requested. Use --decoder_layer or --decoder_layers.")
+    return normalized_layers
+
+
+def get_layer_subdir_name(layer: int) -> str:
+    """Map layer ids to deterministic output subdirectories."""
+    if layer == -1:
+        return "layer_final"
+    return f"layer_{layer:02d}"
+
+
 def apply_pooling(features: torch.Tensor, pooling: str) -> torch.Tensor:
     if features.ndim == 1:
         return features
@@ -235,6 +294,7 @@ def write_metadata(
     model_name: str,
     sample_rate: int,
     decoder_layer: int,
+    requested_decoder_layers: Sequence[int],
     pooling: str,
     feature_shape: Sequence[int],
 ) -> None:
@@ -244,6 +304,7 @@ def write_metadata(
         "model_name": model_name,
         "sample_rate": sample_rate,
         "decoder_layer": decoder_layer,
+        "requested_decoder_layers": list(requested_decoder_layers),
         "pooling": pooling,
         "feature_shape": list(feature_shape),
     }
@@ -263,11 +324,14 @@ def main() -> None:
 
     device = resolve_device(args.device)
     processor = AutoProcessor.from_pretrained(args.model_name)
-    model = MusicgenForConditionalGeneration.from_pretrained(args.model_name)
+    # `from_pretrained` type stubs can be imprecise across transformers versions,
+    # so we keep this as Any for static checkers while preserving runtime behavior.
+    model: Any = MusicgenForConditionalGeneration.from_pretrained(args.model_name)
     model.to(device)
     model.eval()
 
     sample_rate = int(model.config.audio_encoder.sampling_rate)
+    requested_layers = parse_requested_layers(args.decoder_layer, args.decoder_layers)
     unconditional_context = get_unconditional_context(model, processor, device)
     audio_paths = collect_audio_files(input_dir, args.audio_glob, args.max_files)
     if not audio_paths:
@@ -277,16 +341,22 @@ def main() -> None:
 
     print(
         f"Extracting MusicGen features from {len(audio_paths)} files "
-        f"using {args.model_name} on {device}"
+        f"using {args.model_name} on {device} for layers {requested_layers}"
     )
 
     for audio_path in tqdm(audio_paths, desc="Extracting", unit="file"):
         relative_path = audio_path.relative_to(input_dir)
-        output_stem = output_dir / relative_path.with_suffix("")
-        feature_path = output_stem.with_suffix(f".{args.save_format}")
-        metadata_path = output_stem.with_suffix(".json")
+        layer_targets = []
+        for layer in requested_layers:
+            layer_subdir = get_layer_subdir_name(layer)
+            output_stem = output_dir / layer_subdir / relative_path.with_suffix("")
+            feature_path = output_stem.with_suffix(f".{args.save_format}")
+            metadata_path = output_stem.with_suffix(".json")
+            layer_targets.append((layer, feature_path, metadata_path))
 
-        if feature_path.exists() and not args.overwrite:
+        # If every target already exists and overwrite is disabled, skip this track
+        # before doing model inference to avoid unnecessary compute.
+        if not args.overwrite and all(target[1].exists() for target in layer_targets):
             continue
 
         waveform = load_audio(audio_path, sample_rate, args.max_duration_sec)
@@ -318,24 +388,36 @@ def main() -> None:
                 return_dict=True,
             )
 
-        decoder_features = select_decoder_hidden_state(
-            outputs.decoder_hidden_states,
-            args.decoder_layer,
-        )
-        decoder_features = decoder_features.squeeze(0).detach().cpu()
-        decoder_features = apply_pooling(decoder_features, args.pooling)
+        # Reuse the same forward pass for all requested layers. This makes
+        # multi-layer studies much faster than rerunning extraction per layer.
+        for layer, feature_path, metadata_path in layer_targets:
+            if feature_path.exists() and not args.overwrite:
+                continue
 
-        save_tensor(feature_path, decoder_features, args.save_format)
-        if args.metadata_json:
-            write_metadata(
-                metadata_path,
-                source_path=audio_path,
-                model_name=args.model_name,
-                sample_rate=sample_rate,
-                decoder_layer=args.decoder_layer,
-                pooling=args.pooling,
-                feature_shape=tuple(decoder_features.shape),
+            decoder_features = select_decoder_hidden_state(
+                outputs.decoder_hidden_states,
+                layer,
             )
+            decoder_features = decoder_features.squeeze(0).detach().cpu()
+            if decoder_features.ndim not in (1, 2):
+                raise ValueError(
+                    f"Unexpected decoder feature shape {tuple(decoder_features.shape)} "
+                    f"for {audio_path} layer {layer}. Expected 1-D or 2-D [T, hidden_dim]."
+                )
+            decoder_features = apply_pooling(decoder_features, args.pooling)
+
+            save_tensor(feature_path, decoder_features, args.save_format)
+            if args.metadata_json:
+                write_metadata(
+                    metadata_path,
+                    source_path=audio_path,
+                    model_name=args.model_name,
+                    sample_rate=sample_rate,
+                    decoder_layer=layer,
+                    requested_decoder_layers=requested_layers,
+                    pooling=args.pooling,
+                    feature_shape=tuple(decoder_features.shape),
+                )
 
     print(f"Saved extracted features under {output_dir}")
 

@@ -23,6 +23,10 @@ dependencies:
   - pysoundfile
   - ffmpeg
 
+    # Notebook support
+    - ipykernel
+    - jupyterlab
+
   # PyTorch on Apple Silicon (MPS backend available via macOS Metal)
   - pytorch
   - torchaudio
