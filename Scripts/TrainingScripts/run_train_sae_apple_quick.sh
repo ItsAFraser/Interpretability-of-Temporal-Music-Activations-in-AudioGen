@@ -18,6 +18,8 @@ Defaults optimized for quick Apple Silicon testing:
   --batch_size 8
   --latent_dim 64
   --max_files 128
+  --val_split 0.1
+  --num_workers 0
   --checkpoint_interval 1
   --log_interval 5
 
@@ -58,6 +60,8 @@ cd "$ROOT_DIR"
   --batch_size 8 \
   --latent_dim 64 \
   --max_files 128 \
+  --val_split 0.1 \
+  --num_workers 0 \
   --checkpoint_interval 1 \
   --log_interval 5 \
   --verbose \

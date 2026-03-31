@@ -20,6 +20,7 @@ Optional extra args are forwarded directly to TrainNewSAE.py.
 Examples:
   Scripts/TrainingScripts/run_train_sae.sh Data/Models/features Output/sae
   Scripts/TrainingScripts/run_train_sae.sh Data/Models/features Output/sae --epochs 20 --batch_size 16 --device cpu
+  Scripts/TrainingScripts/run_train_sae.sh Data/Models/features Output/sae --val_split 0.1 --num_workers 4
 EOF
   exit 0
 fi

@@ -89,8 +89,26 @@ Scripts/TrainingScripts/run_train_sae_apple_quick.sh \
     Output/sae-quick-smoke \
     --sample_mode frames \
     --frame_stride 4 \
-    --max_frames 4096
+    --max_frames 4096 \
+    --val_split 0.1
 ```
+
+For larger CUDA/HPC runs, use:
+
+```bash
+Scripts/TrainingScripts/run_train_sae_hpc.sh \
+    Data/Models/features/layer_final \
+    Output/sae-hpc-layer-final \
+    --sample_mode frames \
+    --frame_stride 2 \
+    --max_frames 0
+```
+
+Each training run now writes:
+
+- `training_metrics.csv` with train and validation reconstruction/sparsity metrics per epoch.
+- `sae_best.pt` selected by lowest validation loss (or train loss if validation is disabled).
+- `run_manifest.json` with full run configuration for reproducibility.
 
 **Analysis (Core Contribution):**
 

@@ -16,6 +16,8 @@ Defaults optimized for CUDA training:
   --epochs 50
   --batch_size 32
   --latent_dim 128
+  --val_split 0.1
+  --num_workers 8
   --checkpoint_interval 5
 
 Examples:
@@ -54,5 +56,7 @@ cd "$ROOT_DIR"
   --epochs 50 \
   --batch_size 32 \
   --latent_dim 128 \
+  --val_split 0.1 \
+  --num_workers 8 \
   --checkpoint_interval 5 \
   "$@"
