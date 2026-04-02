@@ -36,9 +36,11 @@ conda activate temporal-music-activations-cuda
 # Go to the directory where the job was submitted from
 cd $SLURM_SUBMIT_DIR
 
-# According to your instructions, model checkpoints should go to scratch
-# Your uNID is u1499410
-SCRATCH_OUTPUT_DIR="/scratch/general/vast/u1499410/sae_output"
+# Defaults target CHPC VAST scratch for the current user.
+CHPC_UID="${CHPC_UID:-$USER}"
+CHPC_SCRATCH_BASE="${CHPC_SCRATCH_BASE:-/scratch/general/vast/${CHPC_UID}}"
+
+SCRATCH_OUTPUT_DIR="${SCRATCH_OUTPUT_DIR:-${CHPC_SCRATCH_BASE}/sae_output}"
 mkdir -p "$SCRATCH_OUTPUT_DIR"
 
 echo "Starting SAE Training on CHPC!"

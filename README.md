@@ -38,6 +38,21 @@ these features should activate periodically and predictably based on where in th
 
 we need a dataset to train a SAE on longer audio files, otherwise the learned features may no capture those longer range patterns such as structural markers. not just 10 second clips [1]. we also need a dataset to evaluate and label features.
 
+### CHPC Download Workflow (DTN + VAST)
+
+For CHPC-compliant large transfers, use the dedicated downloader on a CHPC Data Transfer Node (`dtn05` to `dtn08`) and write to VAST scratch.
+
+```bash
+Scripts/SetupScripts/chpc_download_mtg_jamendo.sh \
+    --dataset raw_30s \
+    --type audio \
+    --source mtg-fast \
+    --target-dir /scratch/general/vast/u1406806/mtg-jamendo \
+    --yes
+```
+
+Detailed instructions are in `Docs/chpc_mtg_jamendo_download.md`.
+
 **Option A: Reuse Original SAE**
 
 The plan is to reuse the original SAE [1], run the SAE over longer audio files, then analyze the temporal activation since the features learned on 10-second audio clips may still fire meaningfully on longer audio files. This helps reduce the cost from retraining a SAE.

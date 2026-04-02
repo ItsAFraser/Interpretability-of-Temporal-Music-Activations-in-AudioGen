@@ -32,14 +32,17 @@ conda activate temporal-music-activations-cuda
 #=======================================================
 cd $SLURM_SUBMIT_DIR
 
-# 将原始生肉数据和提出来的特征全部放进大容量专用的 scratch 区
-RAW_AUDIO_DIR="/scratch/general/vast/u1499410/raw_30s_audio_low"
-SCRATCH_FEATURES_DIR="/scratch/general/vast/u1499410/sae_output/features"
+# Defaults target CHPC VAST scratch for the current user.
+CHPC_UID="${CHPC_UID:-$USER}"
+CHPC_SCRATCH_BASE="${CHPC_SCRATCH_BASE:-/scratch/general/vast/${CHPC_UID}}"
+
+RAW_AUDIO_DIR="${RAW_AUDIO_DIR:-${CHPC_SCRATCH_BASE}/mtg-jamendo/raw_30s/audio}"
+SCRATCH_FEATURES_DIR="${SCRATCH_FEATURES_DIR:-${CHPC_SCRATCH_BASE}/sae_output/features}"
 mkdir -p "$SCRATCH_FEATURES_DIR"
 
 echo "Starting Feature Extraction on CHPC..."
 
-# 运行库中自带的提取脚本
+# Run the repository extraction launcher.
 bash Scripts/TrainingScripts/run_extract_musicgen_features.sh \
     "$RAW_AUDIO_DIR" \
     "$SCRATCH_FEATURES_DIR" \
