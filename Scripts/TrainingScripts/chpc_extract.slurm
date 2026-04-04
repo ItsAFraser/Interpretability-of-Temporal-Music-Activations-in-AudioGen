@@ -19,9 +19,9 @@
 #=======================================================
 # Environment Setup
 #=======================================================
-echo "Loading default modern CUDA environment..."
+echo "Loading modern CUDA environment..."
 module purge
-# Removed 'module load cuda/11.8.0' to prevent JIT compiler crash on Blackwell (sm_120) nodes
+module load cuda/12.6.3
 
 
 echo "Activating Conda Environment..."

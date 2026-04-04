@@ -21,7 +21,7 @@
 #=======================================================
 echo "Loading modern CUDA environment..."
 module purge
-# Removed 'module load cuda/11.8.0' to prevent JIT crash on Blackwell
+module load cuda/12.6.3
 module list
 
 echo "Activating Conda Environment..."
