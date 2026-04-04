@@ -19,9 +19,9 @@
 #=======================================================
 # Environment Setup (Based on CHPC Instructions)
 #=======================================================
-echo "Loading CUDA 11.8.0..."
+echo "Loading modern CUDA environment..."
 module purge
-module load cuda/11.8.0
+# Removed 'module load cuda/11.8.0' to prevent JIT crash on Blackwell
 module list
 
 echo "Activating Conda Environment..."
