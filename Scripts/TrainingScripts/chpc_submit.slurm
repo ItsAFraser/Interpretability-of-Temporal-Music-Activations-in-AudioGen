@@ -21,6 +21,7 @@
 #=======================================================
 echo "Loading modern CUDA environment..."
 module purge
+module load gcc
 module load cuda/12.6.3
 module list
 
