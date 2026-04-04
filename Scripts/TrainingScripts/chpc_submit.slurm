@@ -30,6 +30,7 @@ echo "Activating Conda Environment..."
 source ~/miniconda3/etc/profile.d/conda.sh
 # Assuming you will create this environment on CHPC
 conda activate temporal-music-activations-cuda
+export LD_LIBRARY_PATH="$CONDA_PREFIX/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 
 #=======================================================
 # Directory Setup & Execution
