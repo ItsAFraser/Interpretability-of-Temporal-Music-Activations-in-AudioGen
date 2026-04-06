@@ -6,7 +6,7 @@ channels:
   - defaults
 
 dependencies:
-  - python=3.12
+  - python=3.11
   - pip
 
   # Core scientific stack
@@ -28,10 +28,10 @@ dependencies:
   - ipykernel
   - jupyterlab
 
-  # PyTorch + CUDA runtime (12.1)
-  - pytorch
-  - torchaudio
-  - pytorch-cuda=12.1
+  # Force the GPU-enabled PyTorch channel builds to avoid conda-forge CPU fallback.
+  - pytorch::pytorch=2.5.*
+  - pytorch::torchaudio=2.5.*
+  - pytorch::pytorch-cuda=12.1
 
   # Pip-only LLM/HF stack
   - pip:

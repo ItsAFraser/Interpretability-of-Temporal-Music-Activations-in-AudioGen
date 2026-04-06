@@ -125,6 +125,139 @@ Each training run now writes:
 - `sae_best.pt` selected by lowest validation loss (or train loss if validation is disabled).
 - `run_manifest.json` with full run configuration for reproducibility.
 
+### CHPC Queue-Friendly SLURM Workflow
+
+The CHPC scripts are tuned for smaller, more schedulable GPU jobs by default.
+
+Current defaults target the live Notchpeak social-science GPU allocation:
+
+- account: `soc-gpu-np`
+- partition: `soc-gpu-np`
+- resources: `1 GPU`, `8 CPU`, `16 GB RAM`, `6 hours`
+
+Before you submit any CHPC extraction or training jobs, make sure the CUDA environment exists. For CHPC, prefer the lean runtime env and place the environment itself on VAST scratch instead of home:
+
+```bash
+bash Scripts/TrainingScripts/rebuild_chpc_cuda_env.sh
+export TEMPORAL_MUSIC_ACTIVATIONS_ENV_PREFIX=/scratch/general/vast/$USER/conda-envs/temporal-music-activations-cuda
+python "$TEMPORAL_MUSIC_ACTIVATIONS_ENV_PREFIX/bin/python" -c "import torch, transformers; print(torch.__version__, torch.version.cuda, torch.backends.cuda.is_built(), torch.cuda.is_available())"
+```
+
+The CUDA environment must report a non-`None` CUDA version, `True` for `torch.backends.cuda.is_built()`, and `True` for `torch.cuda.is_available()` on a GPU node. If it prints a CPU-only build, remove and recreate the environment before submitting jobs.
+
+The full [Temporal-Music-Activations-cuda.yaml](Temporal-Music-Activations-cuda.yaml) file is still useful for local notebook work. For CHPC batch jobs, use the lean [Temporal-Music-Activations-cuda-chpc.yaml](Temporal-Music-Activations-cuda-chpc.yaml) profile or the rebuild helper above.
+
+If the checker fails before torch diagnostics, or `conda run -n temporal-music-activations-cuda python -c "import torch"` fails, rebuild the CHPC CUDA environment with the repo helper:
+
+```bash
+bash Scripts/TrainingScripts/rebuild_chpc_cuda_env.sh
+```
+
+This rebuild script does three things differently from a one-shot `conda env create`:
+
+- installs the GPU-enabled PyTorch packages first with `--strict-channel-priority`
+- installs only the runtime Conda stack needed for extraction and training
+- places the environment, Conda cache, and pip cache on VAST scratch by default so home storage does not fill up again
+
+On a CHPC GPU node, you can now run a single verification command instead of checking this manually:
+
+```bash
+bash Scripts/TrainingScripts/check_chpc_cuda_env.sh
+```
+
+This script loads the CHPC CUDA module, resolves the repo Python environment through `conda_utils.sh`, prints the detected GPU via `nvidia-smi`, and exits non-zero if PyTorch is CPU-only or cannot see the allocated GPU.
+
+If you do not want to wait inside an interactive `srun` session, submit the short batch checker instead:
+
+```bash
+sbatch Scripts/TrainingScripts/chpc_check_cuda_env.slurm
+```
+
+Then inspect the resulting `CheckCudaEnv_<jobid>.out` file in the directory where you ran `sbatch`.
+
+The checker wrapper now prefers a direct environment Python when it finds one at either `~/.conda/envs/temporal-music-activations-cuda/bin/python` or `/scratch/general/vast/$USER/conda-envs/temporal-music-activations-cuda/bin/python`, which avoids slow Conda activation during the verification job.
+
+The CHPC scripts now fail fast if Python or the Conda environment is missing. If your Conda install is not in a standard location, set one of these overrides before `sbatch`:
+
+- `TEMPORAL_MUSIC_ACTIVATIONS_PYTHON=/path/to/env/bin/python`
+- `TEMPORAL_MUSIC_ACTIVATIONS_CONDA_SH=/path/to/etc/profile.d/conda.sh`
+- `TEMPORAL_MUSIC_ACTIVATIONS_ENV_NAME=temporal-music-activations-cuda`
+- `TEMPORAL_MUSIC_ACTIVATIONS_ENV_PREFIX=/scratch/general/vast/$USER/conda-envs/temporal-music-activations-cuda`
+
+The CHPC Slurm entrypoints now move heavyweight caches off home storage by default:
+
+- `HF_HOME=/scratch/general/vast/$USER/hf-cache`
+- `TORCH_HOME=/scratch/general/vast/$USER/torch-cache`
+- `TMPDIR=/scratch/general/vast/$USER/tmp`
+- `XDG_CACHE_HOME=/scratch/general/vast/$USER/xdg-cache`
+
+You can override any of these before `sbatch` if you want a different scratch layout.
+
+The CHPC Slurm wrappers for environment checking, extraction, and training now prefer a direct environment Python when they find one. That avoids slow Conda activation during batch startup and makes the jobs more reliable on shared storage.
+
+Feature extraction on CHPC now supports deterministic file slicing, which makes SLURM arrays straightforward. Each job can extract all MusicGen decoder layers for a chunk of files into the shared VAST feature tree.
+
+Submit one pilot extraction chunk:
+
+```bash
+EXTRACT_CHUNK_SIZE=256 \
+sbatch Scripts/TrainingScripts/chpc_extract.slurm
+```
+
+Submit several extraction chunks as a job array:
+
+```bash
+EXTRACT_CHUNK_SIZE=256 \
+sbatch --array=0-7 Scripts/TrainingScripts/chpc_extract.slurm
+```
+
+Or use the helper script for a decent first run over all layers:
+
+```bash
+bash Scripts/TrainingScripts/submit_chunked_extract.sh
+```
+
+That defaults to 1,024 files split into 8 jobs of 128 files each. Override with `TOTAL_FILES` and `CHUNK_SIZE` when needed.
+
+Useful extraction overrides:
+
+- `RAW_AUDIO_DIR` defaults to `/scratch/general/vast/$USER/mtg-jamendo/raw_30s/audio`
+- `SCRATCH_FEATURES_DIR` defaults to `/scratch/general/vast/$USER/sae_output/features`
+- `EXTRACT_LAYERS` defaults to `0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,-1`
+- `EXTRACT_CHUNK_SIZE` defaults to `256`
+- `EXTRACT_FILE_START` can be set manually for one-off reruns
+- `SBATCH_ACCOUNT` and `SBATCH_PARTITION` can override the helper defaults if your allocation differs
+
+If you had to clean up home storage, deleting `.mamba` and generic cache directories is usually recoverable. The important thing is to keep future Hugging Face and torch caches on VAST scratch so MusicGen downloads do not repopulate home.
+
+After extraction, train one SAE per selected layer directory. The CHPC training script defaults to a smaller profile and reads from scratch-based feature directories.
+
+Train `layer_final` on CHPC:
+
+```bash
+TRAIN_LAYER_NAME=layer_final \
+sbatch Scripts/TrainingScripts/chpc_submit.slurm
+```
+
+Train a selected intermediate layer with a denser sample schedule:
+
+```bash
+TRAIN_LAYER_NAME=layer_08 \
+TRAIN_FRAME_STRIDE=2 \
+TRAIN_BATCH_SIZE=64 \
+sbatch Scripts/TrainingScripts/chpc_submit.slurm
+```
+
+Useful training overrides:
+
+- `TRAIN_DATA_DIR` to point at a non-default feature directory
+- `TRAIN_OUTPUT_DIR` to override the per-layer scratch output path
+- `TRAIN_EPOCHS` defaults to `50`
+- `TRAIN_BATCH_SIZE` defaults to `64`
+- `TRAIN_FRAME_STRIDE` defaults to `4`
+- `TRAIN_MAX_FRAMES` or `TRAIN_MAX_FILES` for pilot runs
+- `TEMPORAL_MUSIC_ACTIVATIONS_PYTHON`, `TEMPORAL_MUSIC_ACTIVATIONS_CONDA_SH`, and `TEMPORAL_MUSIC_ACTIVATIONS_ENV_NAME` can override the Python bootstrap when Conda is installed in a non-standard location
+
 **Analysis (Core Contribution):**
 
 the goal is to characterize the shape of these time series and cluster features based on their temporal behavior.

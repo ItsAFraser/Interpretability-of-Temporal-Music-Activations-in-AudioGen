@@ -36,19 +36,25 @@ shift 2
 
 ROOT_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 TRAIN_SCRIPT="$ROOT_DIR/Temporal-Music-Activations/TrainNewSAE.py"
+CONDA_UTILS="$ROOT_DIR/Scripts/TrainingScripts/conda_utils.sh"
 
 if [[ ! -f "$TRAIN_SCRIPT" ]]; then
   echo "Error: Training script not found at: $TRAIN_SCRIPT" >&2
   exit 1
 fi
 
-if [[ -n "${TEMPORAL_MUSIC_ACTIVATIONS_PYTHON:-}" ]]; then
-  PYTHON_CMD=("$TEMPORAL_MUSIC_ACTIVATIONS_PYTHON")
-elif conda env list | grep -q '^temporal-music-activations-apple '; then
-  PYTHON_CMD=(conda run -n temporal-music-activations-apple python)
-else
-  PYTHON_CMD=(python)
+if [[ ! -f "$CONDA_UTILS" ]]; then
+  echo "Error: Missing helper script at: $CONDA_UTILS" >&2
+  exit 1
 fi
+
+# shellcheck disable=SC1090
+source "$CONDA_UTILS"
+temporal_setup_python_environment temporal-music-activations-apple
+temporal_print_python_diagnostics "$TEMPORAL_MUSIC_ACTIVATIONS_ACTIVE_PYTHON"
+temporal_validate_python_imports "$TEMPORAL_MUSIC_ACTIVATIONS_ACTIVE_PYTHON" torch numpy
+
+PYTHON_CMD=("$TEMPORAL_MUSIC_ACTIVATIONS_ACTIVE_PYTHON")
 
 cd "$ROOT_DIR"
 

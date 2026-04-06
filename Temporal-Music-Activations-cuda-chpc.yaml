@@ -1,0 +1,34 @@
+name: temporal-music-activations-cuda-chpc
+channels:
+  - pytorch
+  - nvidia
+  - conda-forge
+  - defaults
+
+dependencies:
+  - python=3.11
+  - pip
+
+  # Minimal runtime stack for CHPC extraction/training.
+  - numpy<2
+  - tqdm
+  - pyyaml
+  - librosa
+  - pysoundfile
+  - ffmpeg
+
+  # Force GPU-enabled PyTorch builds before anything can fall back to CPU.
+  - pytorch::pytorch=2.5.*
+  - pytorch::torchaudio=2.5.*
+  - pytorch::pytorch-cuda=12.1
+
+  - pip:
+      - transformers==4.46.3
+      - tokenizers
+      - sentencepiece
+      - safetensors
+      - huggingface_hub
+
+# Recommended CHPC usage:
+#   conda env create -p /scratch/general/vast/$USER/conda-envs/temporal-music-activations-cuda -f Temporal-Music-Activations-cuda-chpc.yaml
+#   export TEMPORAL_MUSIC_ACTIVATIONS_ENV_PREFIX=/scratch/general/vast/$USER/conda-envs/temporal-music-activations-cuda

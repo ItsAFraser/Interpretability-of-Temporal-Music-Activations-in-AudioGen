@@ -86,6 +86,18 @@ def parse_args() -> argparse.Namespace:
         help="Optional cap on the number of audio files to process.",
     )
     parser.add_argument(
+        "--file_start",
+        type=int,
+        default=0,
+        help="Zero-based index of the first sorted audio file to process.",
+    )
+    parser.add_argument(
+        "--file_count",
+        type=int,
+        default=0,
+        help="Optional number of sorted audio files to process starting at --file_start.",
+    )
+    parser.add_argument(
         "--max_duration_sec",
         type=float,
         default=0.0,
@@ -130,6 +142,22 @@ def collect_audio_files(input_dir: Path, audio_glob: str, max_files: int) -> Lis
     if max_files and max_files > 0:
         paths = paths[:max_files]
     return paths
+
+
+def select_audio_slice(audio_paths: List[Path], file_start: int, file_count: int) -> List[Path]:
+    """Select a deterministic slice of the sorted audio file list."""
+    if file_start < 0:
+        raise ValueError(f"file_start must be >= 0, got {file_start}")
+    if file_count < 0:
+        raise ValueError(f"file_count must be >= 0, got {file_count}")
+    if file_start >= len(audio_paths):
+        raise ValueError(
+            f"file_start={file_start} is out of range for {len(audio_paths)} discovered audio files"
+        )
+
+    if file_count == 0:
+        return audio_paths[file_start:]
+    return audio_paths[file_start:file_start + file_count]
 
 
 def load_audio(path: Path, sample_rate: int, max_duration_sec: float) -> np.ndarray:
@@ -338,10 +366,17 @@ def main() -> None:
         raise ValueError(
             f"No audio files found under {input_dir} with glob {args.audio_glob!r}"
         )
+    audio_paths = select_audio_slice(audio_paths, args.file_start, args.file_count)
+    if not audio_paths:
+        raise ValueError(
+            "The requested file slice is empty. "
+            f"Check --file_start={args.file_start} and --file_count={args.file_count}."
+        )
 
     print(
         f"Extracting MusicGen features from {len(audio_paths)} files "
-        f"using {args.model_name} on {device} for layers {requested_layers}"
+        f"using {args.model_name} on {device} for layers {requested_layers} "
+        f"(file_start={args.file_start}, file_count={args.file_count or 'all'})"
     )
 
     for audio_path in tqdm(audio_paths, desc="Extracting", unit="file"):

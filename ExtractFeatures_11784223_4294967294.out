@@ -1,0 +1,43 @@
+Using named environment python: /uufs/chpc.utah.edu/common/home/u1406806/.conda/envs/temporal-music-activations-cuda/bin/python
+Loading CHPC compiler/CUDA modules...
+  loading GCC module: gcc
+  loading CUDA module: cuda/12.6.3
+Loaded modules:
+
+Currently Loaded Modules:
+  1) gcc/8.5.0   2) cuda/12.6.3 (g)
+
+  Where:
+   g:  built for GPU
+
+ 
+
+Resolved Python environment: external-python
+Resolved Python executable: /uufs/chpc.utah.edu/common/home/u1406806/.conda/envs/temporal-music-activations-cuda/bin/python
+Python 3.11.15
+Validated Python imports: torch, transformers
+Torch version: 2.5.1
+torch.version.cuda: 12.1
+torch.backends.cuda.is_built(): True
+torch.cuda.is_available(): True
+CUDA device count: 1
+CUDA device 0: NVIDIA A800 40GB Active
+Starting Feature Extraction on CHPC...
+  slurm account: soc-gpu-np
+  slurm partition: soc-gpu-np
+  raw audio dir: /scratch/general/vast/u1406806/mtg-jamendo/raw_30s/audio
+  output dir: /scratch/general/vast/u1406806/sae_output/features
+  decoder layers: 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,-1
+  device: cuda
+  array task id: 0
+  file_start: 0
+  file_count: 8
+  python: /uufs/chpc.utah.edu/common/home/u1406806/.conda/envs/temporal-music-activations-cuda/bin/python
+  HF_HOME: /scratch/general/vast/u1406806/hf-cache
+  TORCH_HOME: /scratch/general/vast/u1406806/torch-cache
+  TMPDIR: /scratch/local/u1406806/11784223
+Resolved Python environment: external-python
+Resolved Python executable: /uufs/chpc.utah.edu/common/home/u1406806/.conda/envs/temporal-music-activations-cuda/bin/python
+Python 3.11.15
+Validated Python imports: torch, transformers
+Extracting MusicGen features from 8 files using facebook/musicgen-small on cuda for layers [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, -1] (file_start=0, file_count=8)
