@@ -54,6 +54,8 @@ if [[ ! -f "$SLURM_SCRIPT" ]]; then
   exit 1
 fi
 
+cd "$ROOT_DIR"
+
 CHPC_UID="${CHPC_UID:-$USER}"
 CHPC_SCRATCH_BASE="${CHPC_SCRATCH_BASE:-/scratch/general/vast/${CHPC_UID}}"
 RAW_AUDIO_DIR="${RAW_AUDIO_DIR:-${CHPC_SCRATCH_BASE}/mtg-jamendo/raw_30s/audio}"

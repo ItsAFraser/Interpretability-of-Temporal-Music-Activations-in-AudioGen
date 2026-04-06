@@ -12,8 +12,8 @@
 #SBATCH --mem=16G
 #SBATCH --time=06:00:00
 #SBATCH --job-name=ExtractFeatures
-#SBATCH --output=ExtractFeatures_%A_%a.out
-#SBATCH --error=ExtractFeatures_%A_%a.err
+#SBATCH --output=Logs/Slurm/ExtractFeatures_%A_%a.out
+#SBATCH --error=Logs/Slurm/ExtractFeatures_%A_%a.err
 
 set -euo pipefail
 
@@ -89,7 +89,7 @@ if [[ ! -f "$RUN_EXTRACT_SCRIPT" ]]; then
     exit 1
 fi
 
-EXTRACT_LAYERS="${EXTRACT_LAYERS:-0,2,4,6,8,10,12,14,16,18,19,20,21,22,-1}"
+EXTRACT_LAYERS="${EXTRACT_LAYERS:-20,21,22,-1}"
 EXTRACT_MAX_DURATION_SEC="${EXTRACT_MAX_DURATION_SEC:-30}"
 EXTRACT_CHUNK_SIZE="${EXTRACT_CHUNK_SIZE:-256}"
 EXTRACT_FILE_START="${EXTRACT_FILE_START:-}"

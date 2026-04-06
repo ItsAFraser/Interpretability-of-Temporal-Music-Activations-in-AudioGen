@@ -12,8 +12,8 @@
 #SBATCH --mem=4G
 #SBATCH --time=00:15:00
 #SBATCH --job-name=CheckCudaEnv
-#SBATCH --output=CheckCudaEnv_%j.out
-#SBATCH --error=CheckCudaEnv_%j.err
+#SBATCH --output=Logs/Slurm/CheckCudaEnv_%j.out
+#SBATCH --error=Logs/Slurm/CheckCudaEnv_%j.err
 
 set -euo pipefail
 

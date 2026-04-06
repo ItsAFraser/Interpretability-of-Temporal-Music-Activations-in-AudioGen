@@ -12,8 +12,8 @@
 #SBATCH --mem=16G
 #SBATCH --time=06:00:00
 #SBATCH --job-name=TrainSAE
-#SBATCH --output=TrainSAE_%j.out
-#SBATCH --error=TrainSAE_%j.err
+#SBATCH --output=Logs/Slurm/TrainSAE_%j.out
+#SBATCH --error=Logs/Slurm/TrainSAE_%j.err
 
 set -euo pipefail
 

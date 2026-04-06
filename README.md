@@ -71,11 +71,32 @@ for activation extraction we can follow the same process that Nikhil Singh did [
 
 then we can take the retrained (or new SAE) and encode each activation  vector to get the sparse feature activations for every time step. this will result in a matrix for each track [num_features × num_timesteps] rather than a single vector.
 
+### Repository Layout
+
+- `Temporal-Music-Activations/`: core Python code for feature extraction, datasets, and SAE training.
+- `Scripts/SetupScripts/`: one-off data layout and download helpers.
+- `Scripts/TrainingScripts/`: active local and CHPC launchers for extraction, environment checks, and SAE training.
+- `Docs/`: CHPC and dataset notes.
+- `Analysis/`: notebooks and downstream analysis.
+- `Logs/Slurm/`: Slurm stdout/stderr for CHPC jobs.
+
+For CHPC runs, submit jobs from the repository root so the relative Slurm log paths resolve cleanly into `Logs/Slurm/`.
+
 ### Current Workflow in This Repo
 
 1. Extract MusicGen decoder residual features from audio into `Data/Models/features`.
 2. Train the SAE on timestep vectors with `--sample_mode frames` so time is not averaged away before training.
 3. Re-run the trained SAE over full per-track feature sequences to obtain sparse activations for temporal analysis.
+
+Active scripts in the current workflow:
+
+- `Scripts/TrainingScripts/chpc_extract.slurm`: CHPC feature extraction entrypoint.
+- `Scripts/TrainingScripts/chpc_submit.slurm`: CHPC SAE training entrypoint.
+- `Scripts/TrainingScripts/check_chpc_cuda_env.sh`: direct GPU-node environment verification.
+- `Scripts/TrainingScripts/chpc_check_cuda_env.slurm`: batch wrapper for the environment check.
+- `Scripts/TrainingScripts/rebuild_chpc_cuda_env.sh`: deterministic CUDA env rebuild helper.
+- `Scripts/TrainingScripts/run_extract_musicgen_features.sh`: local or wrapper-based extraction launcher.
+- `Scripts/TrainingScripts/run_train_sae_hpc.sh`: SAE training launcher used by CHPC jobs.
 
 Example extraction command:
 
@@ -173,7 +194,7 @@ If you do not want to wait inside an interactive `srun` session, submit the shor
 sbatch Scripts/TrainingScripts/chpc_check_cuda_env.slurm
 ```
 
-Then inspect the resulting `CheckCudaEnv_<jobid>.out` file in the directory where you ran `sbatch`.
+Then inspect the resulting log files under `Logs/Slurm/`.
 
 The checker wrapper now prefers a direct environment Python when it finds one at either `~/.conda/envs/temporal-music-activations-cuda/bin/python` or `/scratch/general/vast/$USER/conda-envs/temporal-music-activations-cuda/bin/python`, which avoids slow Conda activation during the verification job.
 
@@ -223,10 +244,11 @@ Useful extraction overrides:
 
 - `RAW_AUDIO_DIR` defaults to `/scratch/general/vast/$USER/mtg-jamendo/raw_30s/audio`
 - `SCRATCH_FEATURES_DIR` defaults to `/scratch/general/vast/$USER/sae_output/features`
-- `EXTRACT_LAYERS` defaults to `0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,-1`
+- `EXTRACT_LAYERS` defaults to `20,21,22,-1`
 - `EXTRACT_CHUNK_SIZE` defaults to `256`
 - `EXTRACT_FILE_START` can be set manually for one-off reruns
 - `SBATCH_ACCOUNT` and `SBATCH_PARTITION` can override the helper defaults if your allocation differs
+- Slurm stdout/stderr lands under `Logs/Slurm/`
 
 If you had to clean up home storage, deleting `.mamba` and generic cache directories is usually recoverable. The important thing is to keep future Hugging Face and torch caches on VAST scratch so MusicGen downloads do not repopulate home.
 
