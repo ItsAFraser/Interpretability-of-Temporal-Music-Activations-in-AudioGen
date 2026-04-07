@@ -140,6 +140,16 @@ Scripts/TrainingScripts/run_train_sae_hpc.sh \
     --max_frames 0
 ```
 
+For CHPC batch submission after a labeled extraction run, use:
+
+```bash
+TRAIN_FEATURES_RUN_NAME=layers20-22-final \
+TRAIN_LAYER_NAME=layer_final \
+Scripts/TrainingScripts/submit_train_sae_hpc.sh
+```
+
+This resolves the training data directory to `/scratch/general/vast/$USER/sae_output/features-layers20-22-final/layer_final` and, by default, writes checkpoints under `/scratch/general/vast/$USER/sae_output/models-layers20-22-final/layer_final`.
+
 Each training run now writes:
 
 - `training_metrics.csv` with train and validation reconstruction/sparsity metrics per epoch.
@@ -215,6 +225,8 @@ The CHPC Slurm entrypoints now move heavyweight caches off home storage by defau
 You can override any of these before `sbatch` if you want a different scratch layout.
 
 The CHPC Slurm wrappers for environment checking, extraction, and training now prefer a direct environment Python when they find one. That avoids slow Conda activation during batch startup and makes the jobs more reliable on shared storage.
+
+The SAE training Slurm path now understands labeled extraction outputs too. Set `TRAIN_FEATURES_RUN_NAME=<label>` before `sbatch Scripts/TrainingScripts/chpc_submit.slurm`, or use `Scripts/TrainingScripts/submit_train_sae_hpc.sh`, and the job will read from `features-<label>` automatically. You can also set `TRAIN_MODEL_RUN_NAME=<label>` if you want the checkpoints grouped under a matching `models-<label>` directory.
 
 Feature extraction on CHPC now supports deterministic file slicing, which makes SLURM arrays straightforward. Each job can extract all MusicGen decoder layers for a chunk of files into the shared VAST feature tree.
 
