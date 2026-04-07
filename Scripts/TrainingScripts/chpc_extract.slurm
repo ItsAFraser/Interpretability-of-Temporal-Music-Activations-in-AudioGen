@@ -94,6 +94,7 @@ EXTRACT_MAX_DURATION_SEC="${EXTRACT_MAX_DURATION_SEC:-30}"
 EXTRACT_CHUNK_SIZE="${EXTRACT_CHUNK_SIZE:-256}"
 EXTRACT_FILE_START="${EXTRACT_FILE_START:-}"
 EXTRACT_MAX_FILES="${EXTRACT_MAX_FILES:-0}"
+EXTRACT_MANIFEST_PATH="${EXTRACT_MANIFEST_PATH:-}"
 EXTRACT_ARRAY_TASK_ID="${SLURM_ARRAY_TASK_ID:-0}"
 EXTRACT_DEVICE="${EXTRACT_DEVICE:-}"
 
@@ -151,6 +152,10 @@ if [[ "$EXTRACT_MAX_FILES" != "0" ]]; then
     EXTRACT_ARGS+=(--max_files "$EXTRACT_MAX_FILES")
 fi
 
+if [[ -n "$EXTRACT_MANIFEST_PATH" ]]; then
+    EXTRACT_ARGS+=(--manifest_path "$EXTRACT_MANIFEST_PATH")
+fi
+
 echo "Starting Feature Extraction on CHPC..."
 echo "  slurm account: ${SLURM_JOB_ACCOUNT:-soc-gpu-np}"
 echo "  slurm partition: ${SLURM_JOB_PARTITION:-soc-gpu-np}"
@@ -161,6 +166,7 @@ echo "  device: $EXTRACT_DEVICE"
 echo "  array task id: $EXTRACT_ARRAY_TASK_ID"
 echo "  file_start: $EXTRACT_FILE_START"
 echo "  file_count: $EXTRACT_CHUNK_SIZE"
+echo "  manifest: ${EXTRACT_MANIFEST_PATH:-<filesystem scan>}"
 echo "  python: $TEMPORAL_MUSIC_ACTIVATIONS_ACTIVE_PYTHON"
 echo "  HF_HOME: $HF_HOME"
 echo "  TORCH_HOME: $TORCH_HOME"

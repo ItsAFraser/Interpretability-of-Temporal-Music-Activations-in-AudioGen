@@ -240,10 +240,23 @@ bash Scripts/TrainingScripts/submit_chunked_extract.sh
 
 That defaults to 1,024 files split into 8 jobs of 128 files each. Override with `TOTAL_FILES` and `CHUNK_SIZE` when needed.
 
+For larger production runs, prefer giving the output tree a run label so new features do not mix with older experiments:
+
+```bash
+TOTAL_FILES=4096 \
+CHUNK_SIZE=64 \
+EXTRACT_RUN_NAME=layers20-22-final \
+EXTRACT_LAYERS=20,21,22,-1 \
+bash Scripts/TrainingScripts/submit_chunked_extract.sh
+```
+
+That writes into `/scratch/general/vast/$USER/sae_output/features-layers20-22-final` unless you override `SCRATCH_FEATURES_DIR` directly.
+
 Useful extraction overrides:
 
 - `RAW_AUDIO_DIR` defaults to `/scratch/general/vast/$USER/mtg-jamendo/raw_30s/audio`
 - `SCRATCH_FEATURES_DIR` defaults to `/scratch/general/vast/$USER/sae_output/features`
+- `EXTRACT_RUN_NAME` appends a label to the default output path, for example `features-layers20-22-final`
 - `EXTRACT_LAYERS` defaults to `20,21,22,-1`
 - `EXTRACT_CHUNK_SIZE` defaults to `256`
 - `EXTRACT_FILE_START` can be set manually for one-off reruns

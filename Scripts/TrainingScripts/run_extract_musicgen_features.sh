@@ -38,13 +38,16 @@ if [[ ! -f "$CONDA_UTILS" ]]; then
   exit 1
 fi
 
-# shellcheck disable=SC1090
-source "$CONDA_UTILS"
-temporal_setup_python_environment temporal-music-activations-cuda temporal-music-activations-apple
-temporal_print_python_diagnostics "$TEMPORAL_MUSIC_ACTIVATIONS_ACTIVE_PYTHON"
-temporal_validate_python_imports "$TEMPORAL_MUSIC_ACTIVATIONS_ACTIVE_PYTHON" torch transformers
-
-PYTHON_CMD=("$TEMPORAL_MUSIC_ACTIVATIONS_ACTIVE_PYTHON")
+if [[ -n "${TEMPORAL_MUSIC_ACTIVATIONS_ACTIVE_PYTHON:-}" && -x "${TEMPORAL_MUSIC_ACTIVATIONS_ACTIVE_PYTHON}" ]]; then
+  PYTHON_CMD=("$TEMPORAL_MUSIC_ACTIVATIONS_ACTIVE_PYTHON")
+else
+  # shellcheck disable=SC1090
+  source "$CONDA_UTILS"
+  temporal_setup_python_environment temporal-music-activations-cuda temporal-music-activations-apple
+  temporal_print_python_diagnostics "$TEMPORAL_MUSIC_ACTIVATIONS_ACTIVE_PYTHON"
+  temporal_validate_python_imports "$TEMPORAL_MUSIC_ACTIVATIONS_ACTIVE_PYTHON" torch transformers
+  PYTHON_CMD=("$TEMPORAL_MUSIC_ACTIVATIONS_ACTIVE_PYTHON")
+fi
 
 cd "$ROOT_DIR"
 

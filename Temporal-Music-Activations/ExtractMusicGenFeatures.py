@@ -14,6 +14,7 @@ Extraction recipe:
 import argparse
 import json
 from pathlib import Path
+import time
 from typing import Any, List, Sequence
 
 import numpy as np
@@ -80,6 +81,16 @@ def parse_args() -> argparse.Namespace:
         help="Glob pattern, relative to input_dir, used to find audio files.",
     )
     parser.add_argument(
+        "--manifest_path",
+        type=str,
+        default="",
+        help=(
+            "Optional text file containing one audio path per line. Relative paths "
+            "are resolved from --input_dir. When provided, this avoids a full "
+            "filesystem scan on every extraction task."
+        ),
+    )
+    parser.add_argument(
         "--max_files",
         type=int,
         default=0,
@@ -133,12 +144,34 @@ def resolve_device(device_arg: str) -> str:
     return "cpu"
 
 
-def collect_audio_files(input_dir: Path, audio_glob: str, max_files: int) -> List[Path]:
-    paths = [
-        path for path in input_dir.glob(audio_glob)
-        if path.is_file() and path.suffix.lower() in AUDIO_EXTENSIONS
-    ]
-    paths.sort()
+def collect_audio_files(
+    input_dir: Path,
+    audio_glob: str,
+    max_files: int,
+    manifest_path: str,
+) -> List[Path]:
+    if manifest_path:
+        manifest_file = Path(manifest_path).expanduser().resolve()
+        if not manifest_file.exists():
+            raise FileNotFoundError(f"Manifest file does not exist: {manifest_file}")
+
+        paths = []
+        for line in manifest_file.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            path = Path(line)
+            if not path.is_absolute():
+                path = input_dir / path
+            if path.suffix.lower() in AUDIO_EXTENSIONS:
+                paths.append(path)
+    else:
+        paths = [
+            path for path in input_dir.glob(audio_glob)
+            if path.is_file() and path.suffix.lower() in AUDIO_EXTENSIONS
+        ]
+        paths.sort()
+
     if max_files and max_files > 0:
         paths = paths[:max_files]
     return paths
@@ -151,9 +184,7 @@ def select_audio_slice(audio_paths: List[Path], file_start: int, file_count: int
     if file_count < 0:
         raise ValueError(f"file_count must be >= 0, got {file_count}")
     if file_start >= len(audio_paths):
-        raise ValueError(
-            f"file_start={file_start} is out of range for {len(audio_paths)} discovered audio files"
-        )
+        return []
 
     if file_count == 0:
         return audio_paths[file_start:]
@@ -339,6 +370,16 @@ def write_metadata(
     metadata_path.write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
 
 
+def format_elapsed_seconds(elapsed_seconds: float) -> str:
+    minutes, seconds = divmod(int(elapsed_seconds), 60)
+    hours, minutes = divmod(minutes, 60)
+    if hours:
+        return f"{hours:d}h {minutes:02d}m {seconds:02d}s"
+    if minutes:
+        return f"{minutes:d}m {seconds:02d}s"
+    return f"{seconds:d}s"
+
+
 def main() -> None:
     args = parse_args()
     from tqdm import tqdm
@@ -358,29 +399,48 @@ def main() -> None:
     model.to(device)
     model.eval()
 
+    print(
+        f"Loaded {args.model_name} on {device}; preparing extraction inputs.",
+        flush=True,
+    )
+
     sample_rate = int(model.config.audio_encoder.sampling_rate)
     requested_layers = parse_requested_layers(args.decoder_layer, args.decoder_layers)
     unconditional_context = get_unconditional_context(model, processor, device)
-    audio_paths = collect_audio_files(input_dir, args.audio_glob, args.max_files)
+    audio_paths = collect_audio_files(
+        input_dir,
+        args.audio_glob,
+        args.max_files,
+        args.manifest_path,
+    )
     if not audio_paths:
         raise ValueError(
             f"No audio files found under {input_dir} with glob {args.audio_glob!r}"
         )
     audio_paths = select_audio_slice(audio_paths, args.file_start, args.file_count)
     if not audio_paths:
-        raise ValueError(
-            "The requested file slice is empty. "
-            f"Check --file_start={args.file_start} and --file_count={args.file_count}."
+        print(
+            "The requested file slice is empty; nothing to do for "
+            f"file_start={args.file_start} and file_count={args.file_count}.",
+            flush=True,
         )
+        return
 
     print(
         f"Extracting MusicGen features from {len(audio_paths)} files "
         f"using {args.model_name} on {device} for layers {requested_layers} "
-        f"(file_start={args.file_start}, file_count={args.file_count or 'all'})"
+        f"(file_start={args.file_start}, file_count={args.file_count or 'all'})",
+        flush=True,
     )
 
-    for audio_path in tqdm(audio_paths, desc="Extracting", unit="file"):
+    overall_start_time = time.perf_counter()
+    for file_index, audio_path in enumerate(tqdm(audio_paths, desc="Extracting", unit="file"), start=1):
+        file_start_time = time.perf_counter()
         relative_path = audio_path.relative_to(input_dir)
+        print(
+            f"[{file_index}/{len(audio_paths)}] Starting {relative_path}",
+            flush=True,
+        )
         layer_targets = []
         for layer in requested_layers:
             layer_subdir = get_layer_subdir_name(layer)
@@ -392,6 +452,10 @@ def main() -> None:
         # If every target already exists and overwrite is disabled, skip this track
         # before doing model inference to avoid unnecessary compute.
         if not args.overwrite and all(target[1].exists() for target in layer_targets):
+            print(
+                f"[{file_index}/{len(audio_paths)}] Skipping {relative_path} because all outputs already exist.",
+                flush=True,
+            )
             continue
 
         waveform = load_audio(audio_path, sample_rate, args.max_duration_sec)
@@ -454,7 +518,16 @@ def main() -> None:
                     feature_shape=tuple(decoder_features.shape),
                 )
 
-    print(f"Saved extracted features under {output_dir}")
+        file_elapsed = time.perf_counter() - file_start_time
+        total_elapsed = time.perf_counter() - overall_start_time
+        print(
+            f"[{file_index}/{len(audio_paths)}] Finished {relative_path} "
+            f"in {format_elapsed_seconds(file_elapsed)} "
+            f"(total {format_elapsed_seconds(total_elapsed)})",
+            flush=True,
+        )
+
+    print(f"Saved extracted features under {output_dir}", flush=True)
 
 
 if __name__ == "__main__":
