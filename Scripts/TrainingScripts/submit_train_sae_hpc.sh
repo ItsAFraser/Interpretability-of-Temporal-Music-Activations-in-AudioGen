@@ -26,6 +26,9 @@ Environment overrides:
   TRAIN_FRAME_STRIDE          Defaults to 4
   TRAIN_MAX_FRAMES            Defaults to 0
   TRAIN_MAX_FILES             Defaults to 0
+  TRAIN_RANDOM_SUBSET_FILES   Randomly choose this many feature files before frame expansion
+                              Defaults to 0 (use all files)
+  TRAIN_SUBSET_SEED           Seed for deterministic random file subset selection (default: 42)
   TRAIN_NUM_WORKERS           Defaults to 8
   SBATCH_ACCOUNT              Defaults to soc-gpu-np
   SBATCH_PARTITION            Defaults to soc-gpu-np
@@ -39,6 +42,7 @@ Examples:
   TRAIN_FEATURES_RUN_NAME=layers20-22-final Scripts/TrainingScripts/submit_train_sae_hpc.sh
   TRAIN_FEATURES_RUN_NAME=layers20-22-final TRAIN_LAYER_NAME=layer_20 Scripts/TrainingScripts/submit_train_sae_hpc.sh
   TRAIN_FEATURES_RUN_NAME=layers20-22-final TRAIN_MODEL_RUN_NAME=layer-comparison TRAIN_LAYER_NAME=layer_21 Scripts/TrainingScripts/submit_train_sae_hpc.sh
+  TRAIN_DATA_DIR=/scratch/general/vast/$USER/sae_output/features-all-layers/layer_final TRAIN_OUTPUT_DIR=/scratch/general/vast/$USER/sae_output/models-all-layers/layer_final-subset TRAIN_FRAME_STRIDE=1 TRAIN_RANDOM_SUBSET_FILES=2048 TRAIN_SUBSET_SEED=42 Scripts/TrainingScripts/submit_train_sae_hpc.sh
   TRAIN_DATA_DIR=/scratch/general/vast/$USER/sae_output/features-custom/layer_final TRAIN_OUTPUT_DIR=/scratch/general/vast/$USER/sae_output/models-custom/layer_final Scripts/TrainingScripts/submit_train_sae_hpc.sh
 EOF
   exit 0
@@ -100,11 +104,14 @@ echo "  output dir: $TRAIN_OUTPUT_DIR"
 echo "  epochs: ${TRAIN_EPOCHS:-50}"
 echo "  batch_size: ${TRAIN_BATCH_SIZE:-64}"
 echo "  frame_stride: ${TRAIN_FRAME_STRIDE:-4}"
+echo "  random_subset_files: ${TRAIN_RANDOM_SUBSET_FILES:-0}"
+echo "  subset_seed: ${TRAIN_SUBSET_SEED:-42}"
 
 export CHPC_UID CHPC_SCRATCH_BASE SCRATCH_OUTPUT_DIR SCRATCH_FEATURES_DIR
 export TRAIN_FEATURES_RUN_NAME TRAIN_MODEL_RUN_NAME TRAIN_LAYER_NAME
 export TRAIN_DATA_DIR TRAIN_OUTPUT_BASE TRAIN_OUTPUT_DIR
-export TRAIN_BATCH_SIZE TRAIN_EPOCHS TRAIN_FRAME_STRIDE TRAIN_MAX_FRAMES TRAIN_MAX_FILES TRAIN_NUM_WORKERS
+export TRAIN_BATCH_SIZE TRAIN_EPOCHS TRAIN_FRAME_STRIDE TRAIN_MAX_FRAMES TRAIN_MAX_FILES
+export TRAIN_RANDOM_SUBSET_FILES TRAIN_SUBSET_SEED TRAIN_NUM_WORKERS
 export TEMPORAL_MUSIC_ACTIVATIONS_PYTHON TEMPORAL_MUSIC_ACTIVATIONS_CONDA_SH
 export TEMPORAL_MUSIC_ACTIVATIONS_ENV_NAME TEMPORAL_MUSIC_ACTIVATIONS_ENV_PREFIX
 export TEMPORAL_MUSIC_ACTIVATIONS_LOAD_CONDA_MODULE TEMPORAL_MUSIC_ACTIVATIONS_CUDA_MODULE

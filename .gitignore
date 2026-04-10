@@ -9,5 +9,5 @@ CheckCudaEnv_*.out
 CheckCudaEnv_*.err
 ExtractFeatures_*.out
 ExtractFeatures_*.err
-TrainSAE_*.out
-TrainSAE_*.err
+*.out
+*.err

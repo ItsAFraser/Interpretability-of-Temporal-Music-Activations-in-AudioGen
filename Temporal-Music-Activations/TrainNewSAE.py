@@ -28,6 +28,7 @@ import json
 import os
 import random
 from datetime import datetime
+from time import perf_counter
 from typing import Optional, Tuple
 
 import numpy as np
@@ -50,8 +51,10 @@ class TrainNewSAE:
     def __init__(self, data_dir, output_dir, epochs=100, batch_size=32, learning_rate=1e-3,
                  latent_dim=128, sparsity_weight=1e-5, sparsity_target=0.05, log_interval=10,
                  device='cuda', seed=42, resume=None, checkpoint_interval=10, max_files=0,
+                 random_subset_files=0, subset_seed=42,
                  sample_mode='frames', frame_stride=1, max_frames=0, metrics_filename='training_metrics.csv',
-                 val_split=0.1, num_workers=0, save_best=True, verbose=False):
+                 val_split=0.1, num_workers=0, prefetch_factor=4, persistent_workers=None,
+                 save_best=True, profile_timing=True, verbose=False):
         self.data_dir = data_dir
         self.output_dir = output_dir
         self.epochs = epochs
@@ -66,16 +69,24 @@ class TrainNewSAE:
         self.resume = resume
         self.checkpoint_interval = checkpoint_interval
         self.max_files = max_files
+        self.random_subset_files = random_subset_files
+        self.subset_seed = subset_seed
         self.sample_mode = sample_mode
         self.frame_stride = frame_stride
         self.max_frames = max_frames
         self.metrics_filename = metrics_filename
         self.val_split = val_split
         self.num_workers = num_workers
+        self.prefetch_factor = prefetch_factor
+        self.persistent_workers = persistent_workers
         self.save_best = save_best
+        self.profile_timing = profile_timing
         self.metrics_path = os.path.join(self.output_dir, self.metrics_filename)
         self.run_manifest_path = os.path.join(self.output_dir, 'run_manifest.json')
         self.verbose = verbose
+
+        if self.prefetch_factor is not None and self.prefetch_factor <= 0:
+            raise ValueError(f"prefetch_factor must be positive, got {self.prefetch_factor}")
 
     def _init_metrics_log(self, append=False):
         """Create the epoch metrics CSV.
@@ -96,6 +107,11 @@ class TrainNewSAE:
                     'train_recon',
                     'train_sparsity',
                     'train_batches',
+                    'train_fetch_sec',
+                    'train_transfer_sec',
+                    'train_compute_sec',
+                    'train_epoch_sec',
+                    'train_samples_per_sec',
                     'val_loss',
                     'val_recon',
                     'val_sparsity',
@@ -109,6 +125,11 @@ class TrainNewSAE:
         train_recon,
         train_sparsity,
         train_batches,
+        train_fetch_sec,
+        train_transfer_sec,
+        train_compute_sec,
+        train_epoch_sec,
+        train_samples_per_sec,
         val_loss,
         val_recon,
         val_sparsity,
@@ -124,6 +145,11 @@ class TrainNewSAE:
                 f"{train_recon:.6f}",
                 f"{train_sparsity:.6f}",
                 train_batches,
+                f"{train_fetch_sec:.6f}",
+                f"{train_transfer_sec:.6f}",
+                f"{train_compute_sec:.6f}",
+                f"{train_epoch_sec:.6f}",
+                f"{train_samples_per_sec:.6f}",
                 '' if val_loss is None else f"{val_loss:.6f}",
                 '' if val_recon is None else f"{val_recon:.6f}",
                 '' if val_sparsity is None else f"{val_sparsity:.6f}",
@@ -152,6 +178,7 @@ class TrainNewSAE:
 
     def _write_run_manifest(self, dataset_size, train_size, val_size, input_dim):
         """Write a run manifest for reproducibility and experiment tracking."""
+        pin_memory, persistent_workers, prefetch_factor = self._resolve_dataloader_settings()
         manifest = {
             'timestamp': datetime.now().isoformat(timespec='seconds'),
             'data_dir': self.data_dir,
@@ -168,8 +195,14 @@ class TrainNewSAE:
             'frame_stride': self.frame_stride,
             'max_frames': self.max_frames,
             'max_files': self.max_files,
+            'random_subset_files': self.random_subset_files,
+            'subset_seed': self.subset_seed,
             'val_split': self.val_split,
             'num_workers': self.num_workers,
+            'pin_memory': pin_memory,
+            'persistent_workers': persistent_workers,
+            'prefetch_factor': prefetch_factor,
+            'profile_timing': self.profile_timing,
             'dataset_size': dataset_size,
             'train_size': train_size,
             'val_size': val_size,
@@ -178,6 +211,14 @@ class TrainNewSAE:
         }
         with open(self.run_manifest_path, 'w', encoding='utf-8') as f:
             json.dump(manifest, f, indent=2)
+
+    def _resolve_dataloader_settings(self):
+        pin_memory = (self.device == 'cuda')
+        persistent_workers = self.num_workers > 0
+        if self.persistent_workers is not None:
+            persistent_workers = bool(self.persistent_workers) and self.num_workers > 0
+        prefetch_factor = self.prefetch_factor if self.num_workers > 0 else None
+        return pin_memory, persistent_workers, prefetch_factor
 
     def _build_dataloader(self, dataset, shuffle):
         """Build a deterministic DataLoader for reproducible experiments."""
@@ -192,15 +233,29 @@ class TrainNewSAE:
             np.random.seed(worker_seed)
             torch.manual_seed(worker_seed)
 
-        return DataLoader(
-            dataset,
-            batch_size=self.batch_size,
-            shuffle=shuffle,
-            num_workers=self.num_workers,
-            pin_memory=(self.device == 'cuda'),
-            worker_init_fn=_seed_worker if self.num_workers > 0 else None,
-            generator=generator,
-        )
+        pin_memory, persistent_workers, prefetch_factor = self._resolve_dataloader_settings()
+        dataloader_kwargs = {
+            'batch_size': self.batch_size,
+            'shuffle': shuffle,
+            'num_workers': self.num_workers,
+            'pin_memory': pin_memory,
+            'worker_init_fn': _seed_worker if self.num_workers > 0 else None,
+            'generator': generator,
+        }
+        if self.num_workers > 0:
+            dataloader_kwargs['persistent_workers'] = persistent_workers
+            if prefetch_factor is not None:
+                dataloader_kwargs['prefetch_factor'] = prefetch_factor
+
+        return DataLoader(dataset, **dataloader_kwargs)
+
+    def _sync_device_for_timing(self):
+        if not self.profile_timing:
+            return
+        if self.device == 'cuda':
+            torch.cuda.synchronize()
+        elif self.device == 'mps' and hasattr(torch, 'mps'):
+            torch.mps.synchronize()
 
     @torch.no_grad()
     def _evaluate(self, model, dataloader) -> Tuple[Optional[float], Optional[float], Optional[float], int]:
@@ -222,11 +277,13 @@ class TrainNewSAE:
                 data = data[0]
             data = data.to(self.device)
 
+            # Forward pass through the SAE without tracking gradients. loss is computed for monitoring but not backpropagated.
             recon_data, latent_activations = model(data)
             recon_loss = torch.nn.functional.mse_loss(recon_data, data)
             sparsity_penalty = self._compute_sparsity_penalty(latent_activations)
             loss = recon_loss + self.sparsity_weight * sparsity_penalty
 
+            # Accumulate batch losses for epoch-level averaging.
             total_loss += loss.item()
             total_recon += recon_loss.item()
             total_sparsity += sparsity_penalty.item()
@@ -284,6 +341,8 @@ class TrainNewSAE:
         dataset = FullLengthAudioDataset(
             self.data_dir,
             max_files=self.max_files,
+            random_subset_files=self.random_subset_files,
+            subset_seed=self.subset_seed,
             sample_mode=self.sample_mode,
             frame_stride=self.frame_stride,
             max_frames=self.max_frames,
@@ -309,6 +368,7 @@ class TrainNewSAE:
             )
 
         # Shuffle only training data. Validation order should remain stable.
+        pin_memory, persistent_workers, prefetch_factor = self._resolve_dataloader_settings()
         train_dataloader = self._build_dataloader(train_dataset, shuffle=True)
         val_dataloader = self._build_dataloader(val_dataset, shuffle=False) if val_dataset is not None else None
 
@@ -316,10 +376,22 @@ class TrainNewSAE:
             f"Loaded {len(dataset)} training samples from {self.data_dir} "
             f"(sample_mode={self.sample_mode}, input_dim={dataset.input_dim})"
         )
+        print(
+            f"Selected {dataset.selected_files} feature files from {dataset.total_files_discovered} discovered "
+            f"(max_files={self.max_files}, random_subset_files={self.random_subset_files}, subset_seed={self.subset_seed})"
+        )
         if val_dataset is not None:
             print(f"Train/val split: {len(train_dataset)} / {len(val_dataset)}")
         else:
             print("Validation disabled (dataset too small or val_split <= 0).")
+        print(
+            "DataLoader settings: "
+            f"num_workers={self.num_workers}, "
+            f"pin_memory={pin_memory}, "
+            f"persistent_workers={persistent_workers}, "
+            f"prefetch_factor={prefetch_factor}, "
+            f"profile_timing={self.profile_timing}"
+        )
 
         self._write_run_manifest(
             dataset_size=len(dataset),
@@ -365,12 +437,32 @@ class TrainNewSAE:
             total_loss = 0.0
             total_recon = 0.0
             total_sparsity = 0.0
-            
-            for batch_idx, data in enumerate(train_dataloader):
+            total_fetch_sec = 0.0
+            total_transfer_sec = 0.0
+            total_compute_sec = 0.0
+            total_train_samples = 0
+            epoch_start_time = perf_counter()
+
+            train_iterator = iter(train_dataloader)
+            batch_idx = 0
+            while True:
+                fetch_start_time = perf_counter()
+                try:
+                    data = next(train_iterator)
+                except StopIteration:
+                    break
+                total_fetch_sec += perf_counter() - fetch_start_time
+
                 if isinstance(data, (tuple, list)):
                     data = data[0]
-                data = data.to(self.device)
-                optimizer.zero_grad()
+                transfer_start_time = perf_counter()
+                data = data.to(self.device, non_blocking=pin_memory)
+                self._sync_device_for_timing()
+                total_transfer_sec += perf_counter() - transfer_start_time
+                total_train_samples += int(data.shape[0])
+
+                optimizer.zero_grad(set_to_none=True)
+                compute_start_time = perf_counter()
                 
                 # Forward pass through the SAE
                 recon_data, latent_activations = model(data)
@@ -385,6 +477,8 @@ class TrainNewSAE:
                 # Keep decoder columns at unit norm so the encoder is forced to
                 # be sparse rather than pushing magnitude into the decoder.
                 model.normalize_decoder()
+                self._sync_device_for_timing()
+                total_compute_sec += perf_counter() - compute_start_time
 
                 total_loss += loss.item()
                 total_recon += recon_loss.item()
@@ -398,11 +492,14 @@ class TrainNewSAE:
                         f"Recon: {recon_loss.item():.6f} "
                         f"Sparsity: {sparsity_penalty.item():.6f}"
                     )
+                batch_idx += 1
 
             train_batches = max(len(train_dataloader), 1)
             avg_loss = total_loss / train_batches
             avg_recon = total_recon / train_batches
             avg_sparsity = total_sparsity / train_batches
+            train_epoch_sec = perf_counter() - epoch_start_time
+            train_samples_per_sec = total_train_samples / max(train_epoch_sec, 1e-8)
 
             # Evaluate at epoch boundary for a stable model-selection signal.
             val_loss, val_recon, val_sparsity, val_batches = self._evaluate(model, val_dataloader)
@@ -412,6 +509,14 @@ class TrainNewSAE:
                 f"Avg Loss: {avg_loss:.6f} "
                 f"Avg Recon: {avg_recon:.6f} "
                 f"Avg Sparsity: {avg_sparsity:.6f}"
+            )
+            print(
+                f"Epoch [{epoch + 1}/{self.epochs}] "
+                f"Timing: fetch={total_fetch_sec:.2f}s "
+                f"transfer={total_transfer_sec:.2f}s "
+                f"compute={total_compute_sec:.2f}s "
+                f"epoch={train_epoch_sec:.2f}s "
+                f"samples/s={train_samples_per_sec:.2f}"
             )
             if val_loss is not None:
                 print(
@@ -427,6 +532,11 @@ class TrainNewSAE:
                 train_recon=avg_recon,
                 train_sparsity=avg_sparsity,
                 train_batches=train_batches,
+                train_fetch_sec=total_fetch_sec,
+                train_transfer_sec=total_transfer_sec,
+                train_compute_sec=total_compute_sec,
+                train_epoch_sec=train_epoch_sec,
+                train_samples_per_sec=train_samples_per_sec,
                 val_loss=val_loss,
                 val_recon=val_recon,
                 val_sparsity=val_sparsity,
@@ -481,6 +591,8 @@ def parse_args():
 
     # Dataset sampling controls.
     parser.add_argument('--max_files', type=int, default=0, help='Limit the number of feature files loaded for quick runs (0 = no limit).')
+    parser.add_argument('--random_subset_files', type=int, default=0, help='Randomly choose this many feature files before frame expansion (0 = use all files).')
+    parser.add_argument('--subset_seed', type=int, default=42, help='Seed used for deterministic random file subset selection.')
     parser.add_argument('--sample_mode', type=str, default='frames', choices=['frames', 'mean'], help='Use every timestep vector or mean-pool each track before training.')
     parser.add_argument('--frame_stride', type=int, default=1, help='Use every Nth timestep when sample_mode=frames.')
     parser.add_argument('--max_frames', type=int, default=0, help='Optional cap on total timestep samples when sample_mode=frames.')
@@ -488,11 +600,16 @@ def parse_args():
     # Validation/performance controls.
     parser.add_argument('--val_split', type=float, default=0.1, help='Fraction of samples used for validation. Set 0 to disable.')
     parser.add_argument('--num_workers', type=int, default=0, help='DataLoader worker processes. Increase on HPC for faster I/O.')
+    parser.add_argument('--prefetch_factor', type=int, default=4, help='How many batches each worker preloads ahead when num_workers > 0.')
+    parser.add_argument('--persistent_workers', action='store_true', dest='persistent_workers', help='Keep DataLoader workers alive across epochs when num_workers > 0.')
+    parser.add_argument('--no_persistent_workers', action='store_false', dest='persistent_workers', help='Disable persistent DataLoader workers.')
     parser.add_argument('--save_best', action='store_true', help='Save best checkpoint as sae_best.pt using val_loss (or train_loss without validation).')
     parser.add_argument('--no_save_best', action='store_false', dest='save_best', help='Disable saving sae_best.pt.')
+    parser.add_argument('--profile_timing', action='store_true', dest='profile_timing', help='Record and print epoch timing breakdowns for data fetch, transfer, and compute.')
+    parser.add_argument('--no_profile_timing', action='store_false', dest='profile_timing', help='Disable timing breakdown instrumentation.')
     parser.add_argument('--metrics_filename', type=str, default='training_metrics.csv', help='CSV filename for epoch-level training metrics in output_dir.')
     parser.add_argument('--verbose', action='store_true', help='Enable detailed per-batch logging.')
-    parser.set_defaults(save_best=True)
+    parser.set_defaults(save_best=True, persistent_workers=None, profile_timing=True)
     return parser.parse_args()
 
 
@@ -514,12 +631,17 @@ def main():
         resume=args.resume,
         checkpoint_interval=args.checkpoint_interval,
         max_files=args.max_files,
+        random_subset_files=args.random_subset_files,
+        subset_seed=args.subset_seed,
         sample_mode=args.sample_mode,
         frame_stride=args.frame_stride,
         max_frames=args.max_frames,
         val_split=args.val_split,
         num_workers=args.num_workers,
+        prefetch_factor=args.prefetch_factor,
+        persistent_workers=args.persistent_workers,
         save_best=args.save_best,
+        profile_timing=args.profile_timing,
         metrics_filename=args.metrics_filename,
         verbose=args.verbose,
     )

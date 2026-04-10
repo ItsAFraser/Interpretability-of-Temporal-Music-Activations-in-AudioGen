@@ -129,6 +129,19 @@ Scripts/TrainingScripts/run_train_sae_apple_quick.sh \
     --val_split 0.1
 ```
 
+For the core temporal-analysis question, preserve stride 1 and reduce runtime by selecting fewer whole tracks rather than skipping timesteps. A schedulable example is:
+
+```bash
+Scripts/TrainingScripts/run_train_sae_hpc.sh \
+    Data/Models/features/layer_final \
+    Output/sae-hpc-layer-final-subset \
+    --sample_mode frames \
+    --frame_stride 1 \
+    --random_subset_files 2048 \
+    --subset_seed 42 \
+    --max_frames 0
+```
+
 For larger CUDA/HPC runs, use:
 
 ```bash
@@ -295,6 +308,51 @@ TRAIN_BATCH_SIZE=64 \
 sbatch Scripts/TrainingScripts/chpc_submit.slurm
 ```
 
+Train a temporally faithful stride-1 subset on CHPC by reducing the number of tracks instead of reducing frames per track:
+
+```bash
+TRAIN_LAYER_NAME=layer_final \
+TRAIN_FRAME_STRIDE=1 \
+TRAIN_RANDOM_SUBSET_FILES=2048 \
+TRAIN_SUBSET_SEED=42 \
+sbatch Scripts/TrainingScripts/chpc_submit.slurm
+```
+
+Train all discovered layers with one array task per layer and a queue-friendly concurrency cap:
+
+```bash
+TRAIN_FEATURES_RUN_NAME=all-layers \
+TRAIN_ARRAY_MAX_CONCURRENT=4 \
+Scripts/TrainingScripts/submit_train_sae_array_hpc.sh
+```
+
+Train an explicit subset of layers with the array workflow:
+
+```bash
+SCRATCH_FEATURES_DIR=/scratch/general/vast/$USER/sae_output/features-all-layers \
+TRAIN_OUTPUT_BASE=/scratch/general/vast/$USER/sae_output/models-all-layers \
+TRAIN_LAYER_NAMES=layer_08,layer_16,layer_final \
+TRAIN_ARRAY_MAX_CONCURRENT=2 \
+Scripts/TrainingScripts/submit_train_sae_array_hpc.sh
+```
+
+Train a stride-1 reduced corpus across several layers while keeping the same deterministic track subset per layer:
+
+```bash
+SCRATCH_FEATURES_DIR=/scratch/general/vast/$USER/sae_output/features-all-layers \
+TRAIN_OUTPUT_BASE=/scratch/general/vast/$USER/sae_output/models-all-layers-stride1-subset \
+TRAIN_LAYER_NAMES=layer_08,layer_16,layer_final \
+TRAIN_FRAME_STRIDE=1 \
+TRAIN_RANDOM_SUBSET_FILES=2048 \
+TRAIN_SUBSET_SEED=42 \
+TRAIN_ARRAY_MAX_CONCURRENT=2 \
+Scripts/TrainingScripts/submit_train_sae_array_hpc.sh
+```
+
+The array submitter validates every requested layer before submission, writes a deterministic layer manifest, and then maps one SLURM array task to one layer-specific training run. Each task reuses the standard per-layer training wrapper, so checkpoints still land under `.../models-<label>/<layer_name>`.
+
+For temporally sensitive experiments, prefer `TRAIN_RANDOM_SUBSET_FILES` with `TRAIN_FRAME_STRIDE=1` over increasing `TRAIN_FRAME_STRIDE`. That keeps full within-track activation trajectories for the selected corpus, which better matches the structural, narrative, and local-event analysis goals in this project.
+
 Useful training overrides:
 
 - `TRAIN_DATA_DIR` to point at a non-default feature directory
@@ -302,6 +360,8 @@ Useful training overrides:
 - `TRAIN_EPOCHS` defaults to `50`
 - `TRAIN_BATCH_SIZE` defaults to `64`
 - `TRAIN_FRAME_STRIDE` defaults to `4`
+- `TRAIN_RANDOM_SUBSET_FILES` randomly selects that many feature files before frame expansion
+- `TRAIN_SUBSET_SEED` makes the reduced corpus reproducible across runs and layers
 - `TRAIN_MAX_FRAMES` or `TRAIN_MAX_FILES` for pilot runs
 - `TEMPORAL_MUSIC_ACTIVATIONS_PYTHON`, `TEMPORAL_MUSIC_ACTIVATIONS_CONDA_SH`, and `TEMPORAL_MUSIC_ACTIVATIONS_ENV_NAME` can override the Python bootstrap when Conda is installed in a non-standard location
 

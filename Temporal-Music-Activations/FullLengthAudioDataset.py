@@ -1,5 +1,5 @@
 import os
-from typing import List, Sequence, Tuple
+from typing import List, Optional, Tuple
 
 import numpy as np
 import torch
@@ -25,17 +25,27 @@ class FullLengthAudioDataset(Dataset):
         self,
         data_dir: str,
         max_files: int = 0,
+        random_subset_files: int = 0,
+        subset_seed: int = 42,
         sample_mode: str = "frames",
         frame_stride: int = 1,
         max_frames: int = 0,
     ):
         self.data_dir = data_dir
+        self.max_files = max(0, int(max_files))
+        self.random_subset_files = max(0, int(random_subset_files))
+        self.subset_seed = int(subset_seed)
         self.sample_mode = sample_mode
         self.frame_stride = max(1, int(frame_stride))
         self.max_frames = max(0, int(max_frames))
+        self._cached_tensor_path: Optional[str] = None
+        self._cached_tensor: Optional[torch.Tensor] = None
+        self._cached_frame_array_path: Optional[str] = None
+        self._cached_frame_array = None
         self.files = self._collect_files(data_dir)
-        if max_files and max_files > 0:
-            self.files = self.files[:max_files]
+        self.total_files_discovered = len(self.files)
+        self.files = self._apply_file_selection(self.files)
+        self.selected_files = len(self.files)
         if not self.files:
             raise ValueError(
                 f"No .pt or .npy files found under: {data_dir}. "
@@ -68,7 +78,36 @@ class FullLengthAudioDataset(Dataset):
         files.sort()
         return files
 
-    def _load_tensor(self, path: str) -> torch.Tensor:
+    def _apply_file_selection(self, files: List[str]) -> List[str]:
+        if self.max_files > 0 and self.random_subset_files > 0:
+            raise ValueError(
+                "max_files and random_subset_files are mutually exclusive. "
+                "Use max_files for quick ordered debugging runs or random_subset_files "
+                "for reproducible reduced-corpus training."
+            )
+
+        selected_files = files
+        if self.max_files > 0:
+            selected_files = selected_files[:self.max_files]
+
+        if self.random_subset_files > 0:
+            if self.random_subset_files > len(selected_files):
+                raise ValueError(
+                    f"random_subset_files={self.random_subset_files} exceeds the number of available files "
+                    f"({len(selected_files)}) under {self.data_dir}."
+                )
+            rng = np.random.default_rng(self.subset_seed)
+            subset_indices = np.sort(
+                rng.choice(len(selected_files), size=self.random_subset_files, replace=False)
+            )
+            selected_files = [selected_files[idx] for idx in subset_indices]
+
+        return selected_files
+
+    def _load_tensor(self, path: str, cache: bool = True) -> torch.Tensor:
+        if cache and path == self._cached_tensor_path and self._cached_tensor is not None:
+            return self._cached_tensor
+
         if path.lower().endswith(".pt"):
             tensor = torch.load(path, map_location="cpu", weights_only=True)
             if not isinstance(tensor, torch.Tensor):
@@ -78,13 +117,25 @@ class FullLengthAudioDataset(Dataset):
             tensor = torch.from_numpy(array)
 
         tensor = tensor.float()
-        if tensor.ndim == 1:
-            return tensor
-        if tensor.ndim == 2:
-            return tensor
+        tensor = self._normalize_temporal_tensor(tensor)
 
-        # Collapse unexpected higher-rank tensors into a temporal matrix [T, D].
-        return tensor.reshape(-1, tensor.shape[-1])
+        if cache:
+            self._cached_tensor_path = path
+            self._cached_tensor = tensor
+
+        return tensor
+
+    def _load_frame_array(self, path: str):
+        if path == self._cached_frame_array_path and self._cached_frame_array is not None:
+            return self._cached_frame_array
+
+        array = np.load(path, mmap_mode="r")
+        if array.ndim > 2:
+            array = array.reshape(-1, array.shape[-1])
+
+        self._cached_frame_array_path = path
+        self._cached_frame_array = array
+        return array
 
     def _normalize_temporal_tensor(self, tensor: torch.Tensor) -> torch.Tensor:
         """Convert supported inputs to either [D] or [T, D]."""
@@ -124,16 +175,29 @@ class FullLengthAudioDataset(Dataset):
             arr = np.load(path, mmap_mode="r")
             return 1 if arr.ndim == 1 else int(arr.shape[0])
         # .pt path: load once and discard data immediately
-        tensor = self._normalize_temporal_tensor(self._load_tensor(path))
+        tensor = self._load_tensor(path, cache=False)
         return 1 if tensor.ndim == 1 else int(tensor.shape[0])
 
     def _get_frame_sample(self, file_idx: int, frame_idx: int) -> torch.Tensor:
-        tensor = self._normalize_temporal_tensor(self._load_tensor(self.files[file_idx]))
+        path = self.files[file_idx]
+
+        if path.lower().endswith(".npy"):
+            array = self._load_frame_array(path)
+            if array.ndim == 1:
+                return torch.from_numpy(np.array(array, dtype=np.float32, copy=True))
+            if frame_idx >= array.shape[0]:
+                raise IndexError(
+                    f"Frame index {frame_idx} out of range for {path} "
+                    f"with {array.shape[0]} frames"
+                )
+            return torch.from_numpy(np.array(array[frame_idx], dtype=np.float32, copy=True))
+
+        tensor = self._load_tensor(path)
         if tensor.ndim == 1:
             return tensor
         if frame_idx >= tensor.shape[0]:
             raise IndexError(
-                f"Frame index {frame_idx} out of range for {self.files[file_idx]} "
+                f"Frame index {frame_idx} out of range for {path} "
                 f"with {tensor.shape[0]} frames"
             )
         return tensor[frame_idx]

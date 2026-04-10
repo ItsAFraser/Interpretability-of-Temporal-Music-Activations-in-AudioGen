@@ -103,6 +103,8 @@ TRAIN_EPOCHS="${TRAIN_EPOCHS:-50}"
 TRAIN_FRAME_STRIDE="${TRAIN_FRAME_STRIDE:-4}"
 TRAIN_MAX_FRAMES="${TRAIN_MAX_FRAMES:-0}"
 TRAIN_MAX_FILES="${TRAIN_MAX_FILES:-0}"
+TRAIN_RANDOM_SUBSET_FILES="${TRAIN_RANDOM_SUBSET_FILES:-0}"
+TRAIN_SUBSET_SEED="${TRAIN_SUBSET_SEED:-42}"
 TRAIN_NUM_WORKERS="${TRAIN_NUM_WORKERS:-8}"
 
 RUN_TRAIN_SCRIPT="$ROOT_DIR/Scripts/TrainingScripts/run_train_sae_hpc.sh"
@@ -122,6 +124,8 @@ echo "  layer: $TRAIN_LAYER_NAME"
 echo "  batch_size: $TRAIN_BATCH_SIZE"
 echo "  epochs: $TRAIN_EPOCHS"
 echo "  frame_stride: $TRAIN_FRAME_STRIDE"
+echo "  random_subset_files: $TRAIN_RANDOM_SUBSET_FILES"
+echo "  subset_seed: $TRAIN_SUBSET_SEED"
 echo "  python: $TEMPORAL_MUSIC_ACTIVATIONS_ACTIVE_PYTHON"
 echo "  HF_HOME: $HF_HOME"
 echo "  TORCH_HOME: $TORCH_HOME"
@@ -133,6 +137,8 @@ bash "$RUN_TRAIN_SCRIPT" "$TRAIN_DATA_DIR" "$TRAIN_OUTPUT_DIR" \
 	--frame_stride "$TRAIN_FRAME_STRIDE" \
 	--max_frames "$TRAIN_MAX_FRAMES" \
 	--max_files "$TRAIN_MAX_FILES" \
+	--random_subset_files "$TRAIN_RANDOM_SUBSET_FILES" \
+	--subset_seed "$TRAIN_SUBSET_SEED" \
 	--num_workers "$TRAIN_NUM_WORKERS"
 
 echo "Job finished."
