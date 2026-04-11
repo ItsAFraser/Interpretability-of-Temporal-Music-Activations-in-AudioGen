@@ -120,8 +120,8 @@ This command writes separate outputs per layer under:
 Example SAE training command without temporal averaging:
 
 ```bash
-Scripts/TrainingScripts/run_train_sae_apple_quick.sh \
-    Data/Models/features \
+Scripts/TrainingScripts/run_train_sae_hpc.sh \
+    Data/Models/features/layer_final \
     Output/sae-quick-smoke \
     --sample_mode frames \
     --frame_stride 4 \
@@ -139,8 +139,11 @@ Scripts/TrainingScripts/run_train_sae_hpc.sh \
     --frame_stride 1 \
     --random_subset_files 2048 \
     --subset_seed 42 \
+    --sampler_mode grouped \
     --max_frames 0
 ```
+
+For stride-1 training, `--sampler_mode grouped` batches frames by source file instead of globally shuffling independent frame samples. This keeps full temporal coverage within the selected tracks but substantially reduces random file access, which is the main bottleneck on CHPC.
 
 For larger CUDA/HPC runs, use:
 
@@ -315,6 +318,7 @@ TRAIN_LAYER_NAME=layer_final \
 TRAIN_FRAME_STRIDE=1 \
 TRAIN_RANDOM_SUBSET_FILES=2048 \
 TRAIN_SUBSET_SEED=42 \
+TRAIN_SAMPLER_MODE=grouped \
 sbatch Scripts/TrainingScripts/chpc_submit.slurm
 ```
 
@@ -345,9 +349,58 @@ TRAIN_LAYER_NAMES=layer_08,layer_16,layer_final \
 TRAIN_FRAME_STRIDE=1 \
 TRAIN_RANDOM_SUBSET_FILES=2048 \
 TRAIN_SUBSET_SEED=42 \
+TRAIN_SAMPLER_MODE=grouped \
 TRAIN_ARRAY_MAX_CONCURRENT=2 \
 Scripts/TrainingScripts/submit_train_sae_array_hpc.sh
 ```
+
+Before enabling local staging for large runs, check your persistent-storage allocation first:
+
+```bash
+mychpc storage
+```
+
+This reports CHPC quota usage for paths like home and VAST scratch. It does not report node-local scratch capacity, so staged jobs still perform their own in-job `df` and subset-size checks before copying files into `TMPDIR`.
+
+Train a stride-1 grouped subset with node-local staging so repeated feature reads come from local scratch instead of VAST:
+
+```bash
+SCRATCH_FEATURES_DIR=/scratch/general/vast/$USER/sae_output/features-all-layers \
+TRAIN_OUTPUT_BASE=/scratch/general/vast/$USER/sae_output/models-all-layers-stride1-staged \
+TRAIN_LAYER_NAMES=layer_08,layer_16,layer_final \
+TRAIN_FRAME_STRIDE=1 \
+TRAIN_RANDOM_SUBSET_FILES=8192 \
+TRAIN_SUBSET_SEED=42 \
+TRAIN_SAMPLER_MODE=grouped \
+TRAIN_STAGE_TO_LOCAL=1 \
+TRAIN_STAGE_MAX_MB=131072 \
+TRAIN_STAGE_TIMEOUT_SEC=900 \
+TRAIN_ARRAY_MAX_CONCURRENT=1 \
+Scripts/TrainingScripts/submit_train_sae_array_hpc.sh
+```
+
+In staged mode, each array task first resolves the exact deterministic selected-file subset from the source layer on VAST, writes a relative-path manifest into the model output directory, copies only those files into node-local scratch, and then trains from that staged directory. If staging fails a guard check, the job logs the failure and falls back to training directly from VAST.
+
+If fetch time is still dominating after staging, enable one-time local repacking so training reads from a smaller number of shard files instead of thousands of tiny feature files:
+
+```bash
+SCRATCH_FEATURES_DIR=/scratch/general/vast/$USER/sae_output/features-all-layers \
+TRAIN_OUTPUT_BASE=/scratch/general/vast/$USER/sae_output/models-all-layers-stride1-repacked \
+TRAIN_LAYER_NAMES=layer_final \
+TRAIN_FRAME_STRIDE=1 \
+TRAIN_RANDOM_SUBSET_FILES=8192 \
+TRAIN_SUBSET_SEED=42 \
+TRAIN_SAMPLER_MODE=grouped \
+TRAIN_STAGE_TO_LOCAL=1 \
+TRAIN_REPACK_STAGED=1 \
+TRAIN_REPACK_SHARD_SIZE_MB=512 \
+TRAIN_STAGE_MAX_MB=131072 \
+TRAIN_STAGE_TIMEOUT_SEC=900 \
+TRAIN_ARRAY_MAX_CONCURRENT=1 \
+Scripts/TrainingScripts/submit_train_sae_array_hpc.sh
+```
+
+Repacking still preserves the selected-file manifest and grouped-by-file semantics. It only changes the local storage layout used after staging.
 
 The array submitter validates every requested layer before submission, writes a deterministic layer manifest, and then maps one SLURM array task to one layer-specific training run. Each task reuses the standard per-layer training wrapper, so checkpoints still land under `.../models-<label>/<layer_name>`.
 
@@ -362,6 +415,12 @@ Useful training overrides:
 - `TRAIN_FRAME_STRIDE` defaults to `4`
 - `TRAIN_RANDOM_SUBSET_FILES` randomly selects that many feature files before frame expansion
 - `TRAIN_SUBSET_SEED` makes the reduced corpus reproducible across runs and layers
+- `TRAIN_SAMPLER_MODE` switches between random frame shuffling and grouped-by-file batch construction
+- `TRAIN_STAGE_TO_LOCAL=1` resolves the selected subset once and stages only those files into node-local scratch before training
+- `TRAIN_REPACK_STAGED=1` repacks the staged subset into local shard arrays before training begins
+- `TRAIN_REPACK_SHARD_SIZE_MB` sets the approximate local shard size used by the repack step
+- `TRAIN_STAGE_MAX_MB` aborts staging when the selected subset is larger than the configured limit in MB
+- `TRAIN_STAGE_TIMEOUT_SEC` bounds the staged rsync copy time when local staging is enabled
 - `TRAIN_MAX_FRAMES` or `TRAIN_MAX_FILES` for pilot runs
 - `TEMPORAL_MUSIC_ACTIVATIONS_PYTHON`, `TEMPORAL_MUSIC_ACTIVATIONS_CONDA_SH`, and `TEMPORAL_MUSIC_ACTIVATIONS_ENV_NAME` can override the Python bootstrap when Conda is installed in a non-standard location
 

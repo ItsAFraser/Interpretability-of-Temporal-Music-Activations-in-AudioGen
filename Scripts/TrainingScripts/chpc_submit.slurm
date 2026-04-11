@@ -106,6 +106,19 @@ TRAIN_MAX_FILES="${TRAIN_MAX_FILES:-0}"
 TRAIN_RANDOM_SUBSET_FILES="${TRAIN_RANDOM_SUBSET_FILES:-0}"
 TRAIN_SUBSET_SEED="${TRAIN_SUBSET_SEED:-42}"
 TRAIN_NUM_WORKERS="${TRAIN_NUM_WORKERS:-8}"
+TRAIN_SAMPLER_MODE="${TRAIN_SAMPLER_MODE:-grouped}"
+TRAIN_STAGE_TO_LOCAL="${TRAIN_STAGE_TO_LOCAL:-0}"
+TRAIN_STAGE_MAX_MB="${TRAIN_STAGE_MAX_MB:-0}"
+TRAIN_STAGE_TIMEOUT_SEC="${TRAIN_STAGE_TIMEOUT_SEC:-0}"
+TRAIN_REPACK_STAGED="${TRAIN_REPACK_STAGED:-0}"
+TRAIN_REPACK_SHARD_SIZE_MB="${TRAIN_REPACK_SHARD_SIZE_MB:-512}"
+
+SOURCE_TRAIN_DATA_DIR="${SCRATCH_FEATURES_DIR}/${TRAIN_LAYER_NAME}"
+TRAIN_DATA_DIR="${TRAIN_DATA_DIR:-${SOURCE_TRAIN_DATA_DIR}}"
+TRAIN_FILE_MANIFEST_PATH="${TRAIN_FILE_MANIFEST_PATH:-}"
+TRAIN_FILE_MANIFEST_METADATA_PATH="${TRAIN_FILE_MANIFEST_METADATA_PATH:-}"
+TRAIN_STAGED_DATA_DIR="${TRAIN_STAGED_DATA_DIR:-${TMPDIR}/sae-staged/${TRAIN_LAYER_NAME}}"
+TRAIN_REPACKED_DATA_DIR="${TRAIN_REPACKED_DATA_DIR:-${TMPDIR}/sae-repacked/${TRAIN_LAYER_NAME}}"
 
 RUN_TRAIN_SCRIPT="$ROOT_DIR/Scripts/TrainingScripts/run_train_sae_hpc.sh"
 if [[ ! -f "$RUN_TRAIN_SCRIPT" ]]; then
@@ -113,11 +126,59 @@ if [[ ! -f "$RUN_TRAIN_SCRIPT" ]]; then
 	exit 1
 fi
 
+STAGE_HELPER_SCRIPT="$ROOT_DIR/Scripts/TrainingScripts/stage_selected_features_to_local.sh"
+REPACK_HELPER_SCRIPT="$ROOT_DIR/Scripts/TrainingScripts/repack_staged_features.sh"
+if [[ "$TRAIN_STAGE_TO_LOCAL" == "1" ]]; then
+	if [[ ! -f "$STAGE_HELPER_SCRIPT" ]]; then
+		echo "Error: Missing staging helper at $STAGE_HELPER_SCRIPT" >&2
+		exit 1
+	fi
+	if [[ -z "$TRAIN_FILE_MANIFEST_PATH" ]]; then
+		TRAIN_FILE_MANIFEST_PATH="$TRAIN_OUTPUT_DIR/selected_feature_files.txt"
+	fi
+	if [[ -z "$TRAIN_FILE_MANIFEST_METADATA_PATH" ]]; then
+		TRAIN_FILE_MANIFEST_METADATA_PATH="$TRAIN_OUTPUT_DIR/selected_feature_files.json"
+	fi
+	if bash "$STAGE_HELPER_SCRIPT" \
+		"$SOURCE_TRAIN_DATA_DIR" \
+		"$TRAIN_STAGED_DATA_DIR" \
+		"$TRAIN_FILE_MANIFEST_PATH" \
+		"$TRAIN_FILE_MANIFEST_METADATA_PATH"; then
+		TRAIN_DATA_DIR="$TRAIN_STAGED_DATA_DIR"
+		TRAIN_DATA_SOURCE_LABEL="local-staged"
+		if [[ "$TRAIN_REPACK_STAGED" == "1" ]]; then
+			if [[ ! -f "$REPACK_HELPER_SCRIPT" ]]; then
+				echo "Error: Missing repack helper at $REPACK_HELPER_SCRIPT" >&2
+				exit 1
+			fi
+			if bash "$REPACK_HELPER_SCRIPT" \
+				"$TRAIN_STAGED_DATA_DIR" \
+				"$TRAIN_FILE_MANIFEST_PATH" \
+				"$TRAIN_REPACKED_DATA_DIR"; then
+				TRAIN_DATA_DIR="$TRAIN_REPACKED_DATA_DIR"
+				TRAIN_DATA_SOURCE_LABEL="local-repacked"
+			else
+				echo "Warning: Local repack failed; falling back to staged individual files." >&2
+			fi
+		fi
+	else
+		echo "Warning: Local staging failed; falling back to source features on VAST." >&2
+		TRAIN_DATA_DIR="$SOURCE_TRAIN_DATA_DIR"
+		TRAIN_FILE_MANIFEST_PATH=""
+		TRAIN_FILE_MANIFEST_METADATA_PATH=""
+		TRAIN_DATA_SOURCE_LABEL="vast-source"
+	fi
+else
+	TRAIN_DATA_SOURCE_LABEL="vast-source"
+fi
+
 echo "Starting SAE Training on CHPC!"
 echo "  slurm account: ${SLURM_JOB_ACCOUNT:-soc-gpu-np}"
 echo "  slurm partition: ${SLURM_JOB_PARTITION:-soc-gpu-np}"
 echo "  feature run label: ${TRAIN_FEATURES_RUN_NAME:-<default>}"
+echo "  source data dir: $SOURCE_TRAIN_DATA_DIR"
 echo "  data dir: $TRAIN_DATA_DIR"
+echo "  data source: $TRAIN_DATA_SOURCE_LABEL"
 echo "  model run label: ${TRAIN_MODEL_RUN_NAME:-<default>}"
 echo "  output dir: $TRAIN_OUTPUT_DIR"
 echo "  layer: $TRAIN_LAYER_NAME"
@@ -126,19 +187,36 @@ echo "  epochs: $TRAIN_EPOCHS"
 echo "  frame_stride: $TRAIN_FRAME_STRIDE"
 echo "  random_subset_files: $TRAIN_RANDOM_SUBSET_FILES"
 echo "  subset_seed: $TRAIN_SUBSET_SEED"
+echo "  sampler_mode: $TRAIN_SAMPLER_MODE"
+echo "  stage_to_local: $TRAIN_STAGE_TO_LOCAL"
+echo "  stage_max_mb: $TRAIN_STAGE_MAX_MB"
+echo "  stage_timeout_sec: $TRAIN_STAGE_TIMEOUT_SEC"
+echo "  repack_staged: $TRAIN_REPACK_STAGED"
+echo "  repack_shard_size_mb: $TRAIN_REPACK_SHARD_SIZE_MB"
+echo "  file_manifest_path: ${TRAIN_FILE_MANIFEST_PATH:-<none>}"
 echo "  python: $TEMPORAL_MUSIC_ACTIVATIONS_ACTIVE_PYTHON"
 echo "  HF_HOME: $HF_HOME"
 echo "  TORCH_HOME: $TORCH_HOME"
 echo "  TMPDIR: $TMPDIR"
 
-bash "$RUN_TRAIN_SCRIPT" "$TRAIN_DATA_DIR" "$TRAIN_OUTPUT_DIR" \
-	--batch_size "$TRAIN_BATCH_SIZE" \
-	--epochs "$TRAIN_EPOCHS" \
-	--frame_stride "$TRAIN_FRAME_STRIDE" \
-	--max_frames "$TRAIN_MAX_FRAMES" \
-	--max_files "$TRAIN_MAX_FILES" \
-	--random_subset_files "$TRAIN_RANDOM_SUBSET_FILES" \
-	--subset_seed "$TRAIN_SUBSET_SEED" \
+train_cmd=(
+	bash "$RUN_TRAIN_SCRIPT" "$TRAIN_DATA_DIR" "$TRAIN_OUTPUT_DIR"
+	--batch_size "$TRAIN_BATCH_SIZE"
+	--epochs "$TRAIN_EPOCHS"
+	--frame_stride "$TRAIN_FRAME_STRIDE"
+	--max_frames "$TRAIN_MAX_FRAMES"
+	--max_files "$TRAIN_MAX_FILES"
+	--random_subset_files "$TRAIN_RANDOM_SUBSET_FILES"
+	--subset_seed "$TRAIN_SUBSET_SEED"
+	--sampler_mode "$TRAIN_SAMPLER_MODE"
 	--num_workers "$TRAIN_NUM_WORKERS"
+	--source_data_dir "$SOURCE_TRAIN_DATA_DIR"
+)
+
+if [[ -n "$TRAIN_FILE_MANIFEST_PATH" ]]; then
+	train_cmd+=(--file_manifest_path "$TRAIN_FILE_MANIFEST_PATH")
+fi
+
+"${train_cmd[@]}"
 
 echo "Job finished."

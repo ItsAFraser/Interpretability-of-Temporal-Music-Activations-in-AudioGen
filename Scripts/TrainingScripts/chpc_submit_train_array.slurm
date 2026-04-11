@@ -94,5 +94,6 @@ echo "  layer manifest: $TRAIN_LAYER_MANIFEST_PATH"
 echo "  selected layer: $TRAIN_LAYER_NAME"
 echo "  feature root: ${SCRATCH_FEATURES_DIR:-<unset>}"
 echo "  model output root: ${TRAIN_OUTPUT_BASE:-<unset>}"
+echo "  stage_to_local: ${TRAIN_STAGE_TO_LOCAL:-0}"
 
 bash "$TRAIN_WRAPPER_SCRIPT"

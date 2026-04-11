@@ -24,6 +24,7 @@ Defaults optimized for multi-GPU or high-memory CUDA nodes:
   --checkpoint_interval 5
   --val_split 0.1
   --num_workers 8
+  --sampler_mode grouped
   --sample_mode frames
   --frame_stride 4
 
@@ -33,6 +34,10 @@ Recommended for temporally faithful reduced-corpus runs:
   --random_subset_files 2048
   --subset_seed 42
 
+Optional reproducibility/staging flags:
+  --file_manifest_path /path/to/selected_feature_files.txt
+  --source_data_dir /path/to/original/source/layer
+
 Environment:
   Set TEMPORAL_MUSIC_ACTIVATIONS_PYTHON to override the Python command.
 
@@ -41,6 +46,8 @@ Examples:
   Scripts/TrainingScripts/run_train_sae_hpc.sh Data/Models/features/layer_08 Output/sae-layer08 --epochs 150 --latent_dim 512
   Scripts/TrainingScripts/run_train_sae_hpc.sh /scratch/general/vast/$USER/sae_output/features/layer_16 /scratch/general/vast/$USER/sae_output/models/layer_16 --frame_stride 2 --max_frames 250000
   Scripts/TrainingScripts/run_train_sae_hpc.sh /scratch/general/vast/$USER/sae_output/features-all-layers/layer_final /scratch/general/vast/$USER/sae_output/models-all-layers/layer_final-subset --frame_stride 1 --random_subset_files 2048 --subset_seed 42
+  Scripts/TrainingScripts/run_train_sae_hpc.sh /scratch/general/vast/$USER/sae_output/features-all-layers/layer_final /scratch/general/vast/$USER/sae_output/models-all-layers/layer_final-grouped --frame_stride 1 --random_subset_files 2048 --subset_seed 42 --sampler_mode grouped
+  Scripts/TrainingScripts/run_train_sae_hpc.sh /scratch/local/$USER/staged/layer_final /scratch/general/vast/$USER/sae_output/models-all-layers/layer_final-staged --file_manifest_path /scratch/general/vast/$USER/sae_output/models-all-layers/layer_final/selected_feature_files.txt --source_data_dir /scratch/general/vast/$USER/sae_output/features-all-layers/layer_final
 EOF
   exit 0
 fi
@@ -82,6 +89,7 @@ cd "$ROOT_DIR"
   --learning_rate 3e-4 \
   --latent_dim 256 \
   --checkpoint_interval 5 \
+  --sampler_mode grouped \
   --sample_mode frames \
   --frame_stride 4 \
   --val_split 0.1 \

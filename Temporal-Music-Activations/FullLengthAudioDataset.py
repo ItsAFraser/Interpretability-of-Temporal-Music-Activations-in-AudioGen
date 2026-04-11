@@ -1,5 +1,6 @@
+import json
 import os
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import torch
@@ -26,6 +27,8 @@ class FullLengthAudioDataset(Dataset):
         data_dir: str,
         max_files: int = 0,
         random_subset_files: int = 0,
+        file_manifest_path: Optional[str] = None,
+        repacked_metadata_path: Optional[str] = None,
         subset_seed: int = 42,
         sample_mode: str = "frames",
         frame_stride: int = 1,
@@ -34,6 +37,8 @@ class FullLengthAudioDataset(Dataset):
         self.data_dir = data_dir
         self.max_files = max(0, int(max_files))
         self.random_subset_files = max(0, int(random_subset_files))
+        self.file_manifest_path = file_manifest_path
+        self.repacked_metadata_path = repacked_metadata_path
         self.subset_seed = int(subset_seed)
         self.sample_mode = sample_mode
         self.frame_stride = max(1, int(frame_stride))
@@ -42,9 +47,26 @@ class FullLengthAudioDataset(Dataset):
         self._cached_tensor: Optional[torch.Tensor] = None
         self._cached_frame_array_path: Optional[str] = None
         self._cached_frame_array = None
-        self.files = self._collect_files(data_dir)
-        self.total_files_discovered = len(self.files)
-        self.files = self._apply_file_selection(self.files)
+        self.data_format = "individual_files"
+        self.repacked_metadata: Optional[Dict] = None
+        self._repacked_file_entries: List[Dict] = []
+
+        auto_repacked_metadata_path = self.repacked_metadata_path
+        if auto_repacked_metadata_path is None:
+            candidate_metadata_path = os.path.join(data_dir, "repacked_metadata.json")
+            if os.path.isfile(candidate_metadata_path):
+                auto_repacked_metadata_path = candidate_metadata_path
+
+        if auto_repacked_metadata_path is not None:
+            self.repacked_metadata_path = auto_repacked_metadata_path
+            self._load_repacked_metadata(auto_repacked_metadata_path)
+            self.files = [entry["relative_path"] for entry in self._repacked_file_entries]
+            self.total_files_discovered = int(self.repacked_metadata["selected_files"])
+        else:
+            self.files = self._resolve_files(data_dir)
+            self.total_files_discovered = len(self.files)
+            if self.file_manifest_path is None:
+                self.files = self._apply_file_selection(self.files)
         self.selected_files = len(self.files)
         if not self.files:
             raise ValueError(
@@ -57,9 +79,13 @@ class FullLengthAudioDataset(Dataset):
                 f"Unsupported sample_mode={self.sample_mode!r}. Use 'mean' or 'frames'."
             )
 
-        sample = self._load_tensor(self.files[0])
-        self.input_dim = int(sample.shape[-1])
+        if self.data_format == "repacked_shards":
+            self.input_dim = int(self.repacked_metadata["input_dim"])
+        else:
+            sample = self._load_tensor(self.files[0])
+            self.input_dim = int(sample.shape[-1])
         self.frame_index: List[Tuple[int, int]] = []
+        self.file_frame_ranges: List[Tuple[int, int]] = []
         if self.sample_mode == "frames":
             self.frame_index = self._build_frame_index()
             if not self.frame_index:
@@ -77,6 +103,59 @@ class FullLengthAudioDataset(Dataset):
                     files.append(os.path.join(dirpath, name))
         files.sort()
         return files
+
+    def _resolve_files(self, root: str) -> List[str]:
+        if self.file_manifest_path is None:
+            return self._collect_files(root)
+
+        files: List[str] = []
+        with open(self.file_manifest_path, 'r', encoding='utf-8') as handle:
+            for line in handle:
+                entry = line.strip()
+                if not entry:
+                    continue
+                path = entry if os.path.isabs(entry) else os.path.join(root, entry)
+                if not os.path.isfile(path):
+                    raise FileNotFoundError(
+                        f"Manifest entry {entry!r} does not exist under data_dir={root}: {path}"
+                    )
+                files.append(path)
+
+        if not files:
+            raise ValueError(
+                f"No feature files were loaded from manifest: {self.file_manifest_path}"
+            )
+        return files
+
+    def _load_repacked_metadata(self, metadata_path: str) -> None:
+        with open(metadata_path, 'r', encoding='utf-8') as handle:
+            metadata = json.load(handle)
+
+        if metadata.get("format") != "repacked_sharded_npy_v1":
+            raise ValueError(
+                f"Unsupported repacked metadata format in {metadata_path}: {metadata.get('format')!r}"
+            )
+
+        file_entries = metadata.get("file_entries", [])
+        if not file_entries:
+            raise ValueError(f"Repacked metadata contains no file entries: {metadata_path}")
+
+        for entry in file_entries:
+            required_keys = {"relative_path", "shard_file", "shard_frame_start", "frame_count"}
+            missing_keys = required_keys.difference(entry)
+            if missing_keys:
+                raise ValueError(
+                    f"Repacked metadata entry is missing keys {sorted(missing_keys)}: {entry}"
+                )
+            shard_path = os.path.join(self.data_dir, entry["shard_file"])
+            if not os.path.isfile(shard_path):
+                raise FileNotFoundError(
+                    f"Repacked shard file listed in metadata does not exist: {shard_path}"
+                )
+
+        self.repacked_metadata = metadata
+        self._repacked_file_entries = file_entries
+        self.data_format = "repacked_shards"
 
     def _apply_file_selection(self, files: List[str]) -> List[str]:
         if self.max_files > 0 and self.random_subset_files > 0:
@@ -152,16 +231,40 @@ class FullLengthAudioDataset(Dataset):
         away the temporal dimension before the model sees the data.
         """
         frame_index: List[Tuple[int, int]] = []
+        self.file_frame_ranges = []
         for file_idx, path in enumerate(self.files):
+            file_start = len(frame_index)
             num_frames = self._get_num_frames(path)
             if num_frames == 1:
                 frame_index.append((file_idx, 0))
+                self.file_frame_ranges.append((file_start, len(frame_index)))
                 continue
             for frame_idx in range(0, num_frames, self.frame_stride):
                 frame_index.append((file_idx, frame_idx))
                 if self.max_frames and len(frame_index) >= self.max_frames:
+                    self.file_frame_ranges.append((file_start, len(frame_index)))
                     return frame_index
+            self.file_frame_ranges.append((file_start, len(frame_index)))
         return frame_index
+
+    def get_file_frame_ranges(self) -> List[Tuple[int, int]]:
+        """Return [start, end) frame-index spans for each selected file."""
+        if self.sample_mode != "frames":
+            raise ValueError("File frame ranges are only available when sample_mode='frames'.")
+        return list(self.file_frame_ranges)
+
+    def get_selected_relative_files(self) -> List[str]:
+        """Return selected files as paths relative to data_dir when possible."""
+        if self.data_format == "repacked_shards":
+            return [entry["relative_path"] for entry in self._repacked_file_entries]
+
+        relative_files: List[str] = []
+        for path in self.files:
+            if os.path.isabs(path):
+                relative_files.append(os.path.relpath(path, self.data_dir))
+            else:
+                relative_files.append(path)
+        return relative_files
 
     def _get_num_frames(self, path: str) -> int:
         """Return the number of timestep frames in a feature file.
@@ -171,6 +274,10 @@ class FullLengthAudioDataset(Dataset):
         construction O(num_files) in metadata I/O rather than O(total_bytes).
         For .pt files a full load is unavoidable (PyTorch has no header-only API).
         """
+        if self.data_format == "repacked_shards":
+            file_idx = self.files.index(path)
+            return int(self._repacked_file_entries[file_idx]["frame_count"])
+
         if path.lower().endswith(".npy"):
             arr = np.load(path, mmap_mode="r")
             return 1 if arr.ndim == 1 else int(arr.shape[0])
@@ -179,6 +286,18 @@ class FullLengthAudioDataset(Dataset):
         return 1 if tensor.ndim == 1 else int(tensor.shape[0])
 
     def _get_frame_sample(self, file_idx: int, frame_idx: int) -> torch.Tensor:
+        if self.data_format == "repacked_shards":
+            entry = self._repacked_file_entries[file_idx]
+            shard_path = os.path.join(self.data_dir, entry["shard_file"])
+            array = self._load_frame_array(shard_path)
+            shard_frame_idx = int(entry["shard_frame_start"]) + int(frame_idx)
+            if shard_frame_idx >= int(entry["shard_frame_start"]) + int(entry["frame_count"]):
+                raise IndexError(
+                    f"Frame index {frame_idx} out of range for repacked file {entry['relative_path']} "
+                    f"with {entry['frame_count']} frames"
+                )
+            return torch.from_numpy(np.array(array[shard_frame_idx], dtype=np.float32, copy=True))
+
         path = self.files[file_idx]
 
         if path.lower().endswith(".npy"):
@@ -212,9 +331,20 @@ class FullLengthAudioDataset(Dataset):
             file_idx, frame_idx = self.frame_index[idx]
             tensor = self._get_frame_sample(file_idx, frame_idx)
         else:
-            tensor = self._normalize_temporal_tensor(self._load_tensor(self.files[idx]))
-            if tensor.ndim == 2:
-                tensor = tensor.mean(dim=0)
+            if self.data_format == "repacked_shards":
+                entry = self._repacked_file_entries[idx]
+                shard_path = os.path.join(self.data_dir, entry["shard_file"])
+                array = self._load_frame_array(shard_path)
+                start = int(entry["shard_frame_start"])
+                end = start + int(entry["frame_count"])
+                if int(entry["frame_count"]) == 1:
+                    tensor = torch.from_numpy(np.array(array[start], dtype=np.float32, copy=True))
+                else:
+                    tensor = torch.from_numpy(np.array(array[start:end], dtype=np.float32, copy=True)).mean(dim=0)
+            else:
+                tensor = self._normalize_temporal_tensor(self._load_tensor(self.files[idx]))
+                if tensor.ndim == 2:
+                    tensor = tensor.mean(dim=0)
 
         if tensor.shape[-1] != self.input_dim:
             raise ValueError(

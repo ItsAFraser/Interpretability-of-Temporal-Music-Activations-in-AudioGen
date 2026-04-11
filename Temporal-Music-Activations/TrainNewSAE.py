@@ -34,6 +34,7 @@ from typing import Optional, Tuple
 import numpy as np
 import torch
 from torch.utils.data import DataLoader, random_split
+from FrameBatchSampler import GroupedFrameBatchSampler
 from FullLengthAudioDataset import FullLengthAudioDataset
 from SparseAutoencoder import SparseAutoencoder
 
@@ -51,7 +52,8 @@ class TrainNewSAE:
     def __init__(self, data_dir, output_dir, epochs=100, batch_size=32, learning_rate=1e-3,
                  latent_dim=128, sparsity_weight=1e-5, sparsity_target=0.05, log_interval=10,
                  device='cuda', seed=42, resume=None, checkpoint_interval=10, max_files=0,
-                 random_subset_files=0, subset_seed=42,
+                 random_subset_files=0, file_manifest_path=None, source_data_dir=None, subset_seed=42,
+                 sampler_mode='random',
                  sample_mode='frames', frame_stride=1, max_frames=0, metrics_filename='training_metrics.csv',
                  val_split=0.1, num_workers=0, prefetch_factor=4, persistent_workers=None,
                  save_best=True, profile_timing=True, verbose=False):
@@ -70,7 +72,10 @@ class TrainNewSAE:
         self.checkpoint_interval = checkpoint_interval
         self.max_files = max_files
         self.random_subset_files = random_subset_files
+        self.file_manifest_path = file_manifest_path
+        self.source_data_dir = source_data_dir or data_dir
         self.subset_seed = subset_seed
+        self.sampler_mode = sampler_mode
         self.sample_mode = sample_mode
         self.frame_stride = frame_stride
         self.max_frames = max_frames
@@ -87,6 +92,8 @@ class TrainNewSAE:
 
         if self.prefetch_factor is not None and self.prefetch_factor <= 0:
             raise ValueError(f"prefetch_factor must be positive, got {self.prefetch_factor}")
+        if self.sampler_mode not in {'random', 'grouped'}:
+            raise ValueError(f"sampler_mode must be 'random' or 'grouped', got {self.sampler_mode!r}")
 
     def _init_metrics_log(self, append=False):
         """Create the epoch metrics CSV.
@@ -176,11 +183,21 @@ class TrainNewSAE:
         if self.verbose:
             print(f"Saved checkpoint: {checkpoint_path}")
 
-    def _write_run_manifest(self, dataset_size, train_size, val_size, input_dim):
+    def _write_run_manifest(
+        self,
+        dataset_size,
+        train_size,
+        val_size,
+        input_dim,
+        selected_relative_files,
+        data_format,
+        repacked_metadata_path,
+    ):
         """Write a run manifest for reproducibility and experiment tracking."""
         pin_memory, persistent_workers, prefetch_factor = self._resolve_dataloader_settings()
         manifest = {
             'timestamp': datetime.now().isoformat(timespec='seconds'),
+            'source_data_dir': self.source_data_dir,
             'data_dir': self.data_dir,
             'output_dir': self.output_dir,
             'epochs': self.epochs,
@@ -192,10 +209,14 @@ class TrainNewSAE:
             'device': self.device,
             'seed': self.seed,
             'sample_mode': self.sample_mode,
+            'sampler_mode': self.sampler_mode,
+            'data_format': data_format,
             'frame_stride': self.frame_stride,
             'max_frames': self.max_frames,
             'max_files': self.max_files,
             'random_subset_files': self.random_subset_files,
+            'file_manifest_path': self.file_manifest_path,
+            'repacked_metadata_path': repacked_metadata_path,
             'subset_seed': self.subset_seed,
             'val_split': self.val_split,
             'num_workers': self.num_workers,
@@ -206,6 +227,8 @@ class TrainNewSAE:
             'dataset_size': dataset_size,
             'train_size': train_size,
             'val_size': val_size,
+            'selected_files': len(selected_relative_files),
+            'selected_relative_files_path': self.file_manifest_path,
             'input_dim': input_dim,
             'metrics_path': self.metrics_path,
         }
@@ -234,6 +257,34 @@ class TrainNewSAE:
             torch.manual_seed(worker_seed)
 
         pin_memory, persistent_workers, prefetch_factor = self._resolve_dataloader_settings()
+
+        use_grouped_sampler = (
+            self.sampler_mode == 'grouped'
+            and self.sample_mode == 'frames'
+            and hasattr(dataset, '__len__')
+            and len(dataset) > 0
+        )
+
+        if use_grouped_sampler:
+            batch_sampler = GroupedFrameBatchSampler(
+                dataset,
+                batch_size=self.batch_size,
+                shuffle_files=shuffle,
+                drop_last=False,
+                seed=self.seed,
+            )
+            dataloader_kwargs = {
+                'batch_sampler': batch_sampler,
+                'num_workers': self.num_workers,
+                'pin_memory': pin_memory,
+                'worker_init_fn': _seed_worker if self.num_workers > 0 else None,
+            }
+            if self.num_workers > 0:
+                dataloader_kwargs['persistent_workers'] = persistent_workers
+                if prefetch_factor is not None:
+                    dataloader_kwargs['prefetch_factor'] = prefetch_factor
+            return DataLoader(dataset, **dataloader_kwargs)
+
         dataloader_kwargs = {
             'batch_size': self.batch_size,
             'shuffle': shuffle,
@@ -338,10 +389,16 @@ class TrainNewSAE:
         # Depending on sample_mode, each sample is either:
         # - one timestep/frame vector (frames mode), or
         # - one mean-pooled track vector (mean mode).
+        repacked_metadata_path = os.path.join(self.data_dir, 'repacked_metadata.json')
+        if not os.path.isfile(repacked_metadata_path):
+            repacked_metadata_path = None
+
         dataset = FullLengthAudioDataset(
             self.data_dir,
             max_files=self.max_files,
             random_subset_files=self.random_subset_files,
+            file_manifest_path=self.file_manifest_path,
+            repacked_metadata_path=repacked_metadata_path,
             subset_seed=self.subset_seed,
             sample_mode=self.sample_mode,
             frame_stride=self.frame_stride,
@@ -390,6 +447,7 @@ class TrainNewSAE:
             f"pin_memory={pin_memory}, "
             f"persistent_workers={persistent_workers}, "
             f"prefetch_factor={prefetch_factor}, "
+            f"sampler_mode={self.sampler_mode}, "
             f"profile_timing={self.profile_timing}"
         )
 
@@ -398,6 +456,9 @@ class TrainNewSAE:
             train_size=len(train_dataset),
             val_size=0 if val_dataset is None else len(val_dataset),
             input_dim=dataset.input_dim,
+            selected_relative_files=dataset.get_selected_relative_files(),
+            data_format=dataset.data_format,
+            repacked_metadata_path=dataset.repacked_metadata_path,
         )
         
         # Initialize SAE and optimizer after dataset load so input_dim can be
@@ -592,7 +653,10 @@ def parse_args():
     # Dataset sampling controls.
     parser.add_argument('--max_files', type=int, default=0, help='Limit the number of feature files loaded for quick runs (0 = no limit).')
     parser.add_argument('--random_subset_files', type=int, default=0, help='Randomly choose this many feature files before frame expansion (0 = use all files).')
+    parser.add_argument('--file_manifest_path', type=str, default=None, help='Optional manifest containing one selected relative feature path per line.')
+    parser.add_argument('--source_data_dir', type=str, default=None, help='Original source layer directory used to resolve a staged file manifest.')
     parser.add_argument('--subset_seed', type=int, default=42, help='Seed used for deterministic random file subset selection.')
+    parser.add_argument('--sampler_mode', type=str, default='random', choices=['random', 'grouped'], help='Batch construction mode for frame training. grouped keeps batches within a small number of files to reduce random I/O.')
     parser.add_argument('--sample_mode', type=str, default='frames', choices=['frames', 'mean'], help='Use every timestep vector or mean-pool each track before training.')
     parser.add_argument('--frame_stride', type=int, default=1, help='Use every Nth timestep when sample_mode=frames.')
     parser.add_argument('--max_frames', type=int, default=0, help='Optional cap on total timestep samples when sample_mode=frames.')
@@ -632,7 +696,10 @@ def main():
         checkpoint_interval=args.checkpoint_interval,
         max_files=args.max_files,
         random_subset_files=args.random_subset_files,
+        file_manifest_path=args.file_manifest_path,
+        source_data_dir=args.source_data_dir,
         subset_seed=args.subset_seed,
+        sampler_mode=args.sampler_mode,
         sample_mode=args.sample_mode,
         frame_stride=args.frame_stride,
         max_frames=args.max_frames,

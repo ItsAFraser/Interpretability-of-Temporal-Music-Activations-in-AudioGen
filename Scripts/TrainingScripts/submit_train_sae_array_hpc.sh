@@ -31,6 +31,12 @@ Environment overrides:
   TRAIN_RANDOM_SUBSET_FILES   Randomly choose this many feature files before frame expansion
                               Defaults to 0 (use all files)
   TRAIN_SUBSET_SEED           Seed for deterministic random file subset selection (default: 42)
+  TRAIN_SAMPLER_MODE          Batch construction mode: random or grouped (default: grouped)
+  TRAIN_STAGE_TO_LOCAL        Stage the selected file subset into node-local scratch before training (default: 0)
+  TRAIN_STAGE_MAX_MB          Abort staging when the selected subset exceeds this many MB (default: 0 = disabled)
+  TRAIN_STAGE_TIMEOUT_SEC     Timeout in seconds for staged rsync copy (default: 0 = disabled)
+  TRAIN_REPACK_STAGED         Repack staged local files into shard arrays before training (default: 0)
+  TRAIN_REPACK_SHARD_SIZE_MB  Approximate target shard size in MB for local repack (default: 512)
   TRAIN_NUM_WORKERS           Defaults to 8
   SBATCH_ACCOUNT              Defaults to soc-gpu-np
   SBATCH_PARTITION            Defaults to soc-gpu-np
@@ -44,7 +50,9 @@ Examples:
   TRAIN_FEATURES_RUN_NAME=all-layers Scripts/TrainingScripts/submit_train_sae_array_hpc.sh
   TRAIN_FEATURES_RUN_NAME=all-layers TRAIN_ARRAY_MAX_CONCURRENT=2 Scripts/TrainingScripts/submit_train_sae_array_hpc.sh
   TRAIN_FEATURES_RUN_NAME=all-layers TRAIN_LAYER_NAMES=layer_08,layer_16,layer_final Scripts/TrainingScripts/submit_train_sae_array_hpc.sh
-  TRAIN_FEATURES_RUN_NAME=all-layers TRAIN_FRAME_STRIDE=1 TRAIN_RANDOM_SUBSET_FILES=2048 TRAIN_SUBSET_SEED=42 TRAIN_ARRAY_MAX_CONCURRENT=2 Scripts/TrainingScripts/submit_train_sae_array_hpc.sh
+  TRAIN_FEATURES_RUN_NAME=all-layers TRAIN_FRAME_STRIDE=1 TRAIN_RANDOM_SUBSET_FILES=2048 TRAIN_SUBSET_SEED=42 TRAIN_SAMPLER_MODE=grouped TRAIN_ARRAY_MAX_CONCURRENT=2 Scripts/TrainingScripts/submit_train_sae_array_hpc.sh
+  TRAIN_FEATURES_RUN_NAME=all-layers TRAIN_FRAME_STRIDE=1 TRAIN_RANDOM_SUBSET_FILES=8192 TRAIN_SUBSET_SEED=42 TRAIN_SAMPLER_MODE=grouped TRAIN_STAGE_TO_LOCAL=1 TRAIN_ARRAY_MAX_CONCURRENT=1 Scripts/TrainingScripts/submit_train_sae_array_hpc.sh
+  TRAIN_FEATURES_RUN_NAME=all-layers TRAIN_FRAME_STRIDE=1 TRAIN_RANDOM_SUBSET_FILES=8192 TRAIN_SUBSET_SEED=42 TRAIN_SAMPLER_MODE=grouped TRAIN_STAGE_TO_LOCAL=1 TRAIN_REPACK_STAGED=1 TRAIN_REPACK_SHARD_SIZE_MB=512 TRAIN_ARRAY_MAX_CONCURRENT=1 Scripts/TrainingScripts/submit_train_sae_array_hpc.sh
   SCRATCH_FEATURES_DIR=/scratch/general/vast/$USER/sae_output/features-all-layers TRAIN_OUTPUT_BASE=/scratch/general/vast/$USER/sae_output/models-all-layers Scripts/TrainingScripts/submit_train_sae_array_hpc.sh
 EOF
   exit 0
@@ -89,6 +97,11 @@ TEMPORAL_MUSIC_ACTIVATIONS_ENV_NAME="${TEMPORAL_MUSIC_ACTIVATIONS_ENV_NAME:-}"
 TEMPORAL_MUSIC_ACTIVATIONS_ENV_PREFIX="${TEMPORAL_MUSIC_ACTIVATIONS_ENV_PREFIX:-}"
 TEMPORAL_MUSIC_ACTIVATIONS_LOAD_CONDA_MODULE="${TEMPORAL_MUSIC_ACTIVATIONS_LOAD_CONDA_MODULE:-}"
 TEMPORAL_MUSIC_ACTIVATIONS_CUDA_MODULE="${TEMPORAL_MUSIC_ACTIVATIONS_CUDA_MODULE:-}"
+TRAIN_STAGE_TO_LOCAL="${TRAIN_STAGE_TO_LOCAL:-0}"
+TRAIN_STAGE_MAX_MB="${TRAIN_STAGE_MAX_MB:-0}"
+TRAIN_STAGE_TIMEOUT_SEC="${TRAIN_STAGE_TIMEOUT_SEC:-0}"
+TRAIN_REPACK_STAGED="${TRAIN_REPACK_STAGED:-0}"
+TRAIN_REPACK_SHARD_SIZE_MB="${TRAIN_REPACK_SHARD_SIZE_MB:-512}"
 
 if [[ ! -d "$SCRATCH_FEATURES_DIR" ]]; then
   echo "Error: Feature root does not exist: $SCRATCH_FEATURES_DIR" >&2
@@ -205,6 +218,16 @@ echo "  batch_size: ${TRAIN_BATCH_SIZE:-64}"
 echo "  frame_stride: ${TRAIN_FRAME_STRIDE:-4}"
 echo "  random_subset_files: ${TRAIN_RANDOM_SUBSET_FILES:-0}"
 echo "  subset_seed: ${TRAIN_SUBSET_SEED:-42}"
+echo "  sampler_mode: ${TRAIN_SAMPLER_MODE:-grouped}"
+echo "  stage_to_local: $TRAIN_STAGE_TO_LOCAL"
+echo "  stage_max_mb: $TRAIN_STAGE_MAX_MB"
+echo "  stage_timeout_sec: $TRAIN_STAGE_TIMEOUT_SEC"
+echo "  repack_staged: $TRAIN_REPACK_STAGED"
+echo "  repack_shard_size_mb: $TRAIN_REPACK_SHARD_SIZE_MB"
+if [[ "$TRAIN_STAGE_TO_LOCAL" == "1" ]] && command -v mychpc >/dev/null 2>&1; then
+  echo "  quota snapshot (mychpc storage):"
+  mychpc storage || true
+fi
 echo "  layers:"
 for layer_name in "${resolved_layers[@]}"; do
   echo "    - $layer_name"
@@ -213,7 +236,9 @@ done
 export CHPC_UID CHPC_SCRATCH_BASE SCRATCH_OUTPUT_DIR SCRATCH_FEATURES_DIR
 export TRAIN_FEATURES_RUN_NAME TRAIN_MODEL_RUN_NAME TRAIN_OUTPUT_BASE
 export TRAIN_BATCH_SIZE TRAIN_EPOCHS TRAIN_FRAME_STRIDE TRAIN_MAX_FRAMES TRAIN_MAX_FILES
-export TRAIN_RANDOM_SUBSET_FILES TRAIN_SUBSET_SEED TRAIN_NUM_WORKERS
+export TRAIN_RANDOM_SUBSET_FILES TRAIN_SUBSET_SEED TRAIN_SAMPLER_MODE TRAIN_NUM_WORKERS
+export TRAIN_STAGE_TO_LOCAL TRAIN_STAGE_MAX_MB TRAIN_STAGE_TIMEOUT_SEC
+export TRAIN_REPACK_STAGED TRAIN_REPACK_SHARD_SIZE_MB
 export TRAIN_LAYER_MANIFEST_PATH
 export TEMPORAL_MUSIC_ACTIVATIONS_PYTHON TEMPORAL_MUSIC_ACTIVATIONS_CONDA_SH
 export TEMPORAL_MUSIC_ACTIVATIONS_ENV_NAME TEMPORAL_MUSIC_ACTIVATIONS_ENV_PREFIX
