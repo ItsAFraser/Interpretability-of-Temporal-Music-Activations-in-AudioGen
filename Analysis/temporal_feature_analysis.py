@@ -1,4 +1,5 @@
 import sys
+import argparse
 import logging
 from pathlib import Path
 from typing import Dict, List, Tuple
@@ -11,6 +12,13 @@ import seaborn as sns
 from scipy import stats
 import torch
 
+# ── CLI overrides ─────────────────────────────────────────────────────────────
+_parser = argparse.ArgumentParser(add_help=False)
+_parser.add_argument("--features_root", type=str, default=None)
+_parser.add_argument("--output_dir",    type=str, default=None)
+_parser.add_argument("--max_tracks",    type=int, default=None)
+_args, _ = _parser.parse_known_args()
+
 # Resolve the repository root whether the kernel starts in Analysis/ or the repo root.
 REPO_ROOT = Path(".").resolve().parent
 if not (REPO_ROOT / "Temporal-Music-Activations").exists():
@@ -21,7 +29,7 @@ sys.path.insert(0, str(REPO_ROOT / "Temporal-Music-Activations"))
 from SparseAutoencoder import SparseAutoencoder
 
 LAYER_NAMES = [f"layer_{i:02d}" for i in range(23)] + ["layer_final"]
-FEATURES_ROOT = Path("/scratch/general/vast/u1406806/sae_output/features-all-layers")
+FEATURES_ROOT = Path(_args.features_root) if _args.features_root else Path("/scratch/general/vast/u1406806/sae_output/features-all-layers")
 SAE_ROOT = Path("/scratch/general/vast/u1406806/sae_output/models-all-layers-stride1-repacked")
 
 FEATURE_LAYER_BY_RUN = {name: name for name in LAYER_NAMES}
@@ -30,11 +38,11 @@ SAE_DIR_BY_RUN = {name: name for name in LAYER_NAMES}
 INPUT_DIM = 1024
 LATENT_DIM = 256
 DEVICE = "cpu"
-MAX_TRACKS = 100
+MAX_TRACKS = _args.max_tracks if _args.max_tracks is not None else 100
 ANALYSIS_SEED = 0
 VIS_TRACKS = 1
 
-OUTPUT_DIR = Path("/scratch/general/vast/u1406806/sae_output/analysis-output")
+OUTPUT_DIR = Path(_args.output_dir) if _args.output_dir else Path("/scratch/general/vast/u1406806/sae_output/analysis-output")
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 # Setup logging to both console and file

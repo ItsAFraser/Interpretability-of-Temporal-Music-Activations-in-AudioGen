@@ -24,6 +24,22 @@ import torch
 AUDIO_EXTENSIONS = {".wav", ".mp3", ".flac", ".ogg", ".m4a", ".aac"}
 
 
+def patch_musicgen_positional_embeddings(model: Any) -> int:
+    """Patch older/broken MusicGen positional embeddings missing `offset`.
+
+    Some installed transformers builds ship a MusicGen sinusoidal positional
+    embedding whose forward pass references `self.offset` without initializing
+    it in `__init__`. Setting it to 0 restores the expected behavior.
+    """
+    patched = 0
+    for module in model.modules():
+        if module.__class__.__name__ == "MusicgenSinusoidalPositionalEmbedding":
+            if not hasattr(module, "offset"):
+                module.offset = 0
+                patched += 1
+    return patched
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Extract MusicGen decoder residual features from audio files."
@@ -396,6 +412,7 @@ def main() -> None:
     # `from_pretrained` type stubs can be imprecise across transformers versions,
     # so we keep this as Any for static checkers while preserving runtime behavior.
     model: Any = MusicgenForConditionalGeneration.from_pretrained(args.model_name)
+    patched_modules = patch_musicgen_positional_embeddings(model)
     model.to(device)
     model.eval()
 
@@ -403,6 +420,11 @@ def main() -> None:
         f"Loaded {args.model_name} on {device}; preparing extraction inputs.",
         flush=True,
     )
+    if patched_modules:
+        print(
+            f"Applied compatibility patch to {patched_modules} MusicGen positional embedding module(s).",
+            flush=True,
+        )
 
     sample_rate = int(model.config.audio_encoder.sampling_rate)
     requested_layers = parse_requested_layers(args.decoder_layer, args.decoder_layers)
