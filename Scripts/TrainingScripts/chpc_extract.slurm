@@ -90,7 +90,7 @@ if [[ ! -f "$RUN_EXTRACT_SCRIPT" ]]; then
 fi
 
 EXTRACT_LAYERS="${EXTRACT_LAYERS:-0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,-1}"
-EXTRACT_MAX_DURATION_SEC="${EXTRACT_MAX_DURATION_SEC:-30}"
+EXTRACT_MAX_DURATION_SEC="${EXTRACT_MAX_DURATION_SEC:-0}"
 EXTRACT_CHUNK_SIZE="${EXTRACT_CHUNK_SIZE:-4096}"
 EXTRACT_FILE_START="${EXTRACT_FILE_START:-}"
 EXTRACT_MAX_FILES="${EXTRACT_MAX_FILES:-0}"
@@ -162,6 +162,7 @@ echo "  slurm partition: ${SLURM_JOB_PARTITION:-soc-gpu-np}"
 echo "  raw audio dir: $RAW_AUDIO_DIR"
 echo "  output dir: $SCRATCH_FEATURES_DIR"
 echo "  decoder layers: $EXTRACT_LAYERS"
+echo "  max duration sec: ${EXTRACT_MAX_DURATION_SEC:-0} (0 means full track)"
 echo "  device: $EXTRACT_DEVICE"
 echo "  array task id: $EXTRACT_ARRAY_TASK_ID"
 echo "  file_start: $EXTRACT_FILE_START"

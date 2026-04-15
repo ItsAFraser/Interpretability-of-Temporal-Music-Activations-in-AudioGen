@@ -20,7 +20,7 @@ Environment overrides:
   EXTRACT_MANIFEST_PATH     Optional cached sorted file manifest used by array tasks
   REBUILD_EXTRACT_MANIFEST  Set to 1 to rebuild the manifest before submission
   EXTRACT_LAYERS            Defaults to 20,21,22,-1
-  EXTRACT_MAX_DURATION_SEC  Defaults to 30
+  EXTRACT_MAX_DURATION_SEC  Defaults to 0 (full track; no truncation)
   EXTRACT_DEVICE            Optional override passed to the extractor (default: wrapper picks cuda on GPU jobs)
   TEMPORAL_MUSIC_ACTIVATIONS_PYTHON   Optional explicit env python passed through to SLURM jobs
   TEMPORAL_MUSIC_ACTIVATIONS_CONDA_SH Optional explicit conda.sh path passed through to SLURM jobs
@@ -71,7 +71,7 @@ if [[ -n "$EXTRACT_RUN_NAME" ]]; then
 fi
 SCRATCH_FEATURES_DIR="${SCRATCH_FEATURES_DIR:-${DEFAULT_FEATURES_DIR}}"
 EXTRACT_LAYERS="${EXTRACT_LAYERS:-20,21,22,-1}"
-EXTRACT_MAX_DURATION_SEC="${EXTRACT_MAX_DURATION_SEC:-30}"
+EXTRACT_MAX_DURATION_SEC="${EXTRACT_MAX_DURATION_SEC:-0}"
 EXTRACT_DEVICE="${EXTRACT_DEVICE:-}"
 SBATCH_ACCOUNT="${SBATCH_ACCOUNT:-soc-gpu-np}"
 SBATCH_PARTITION="${SBATCH_PARTITION:-soc-gpu-np}"
@@ -81,7 +81,8 @@ TEMPORAL_MUSIC_ACTIVATIONS_ENV_NAME="${TEMPORAL_MUSIC_ACTIVATIONS_ENV_NAME:-}"
 TEMPORAL_MUSIC_ACTIVATIONS_ENV_PREFIX="${TEMPORAL_MUSIC_ACTIVATIONS_ENV_PREFIX:-}"
 TEMPORAL_MUSIC_ACTIVATIONS_LOAD_CONDA_MODULE="${TEMPORAL_MUSIC_ACTIVATIONS_LOAD_CONDA_MODULE:-}"
 TEMPORAL_MUSIC_ACTIVATIONS_CUDA_MODULE="${TEMPORAL_MUSIC_ACTIVATIONS_CUDA_MODULE:-}"
-EXTRACT_MANIFEST_PATH="${EXTRACT_MANIFEST_PATH:-${CHPC_SCRATCH_BASE}/sae_output/manifests/mtg_jamendo_raw_30s_audio.txt}"
+RAW_AUDIO_DIR_SLUG="$(printf '%s' "$RAW_AUDIO_DIR" | sed 's#[^A-Za-z0-9._-]#_#g')"
+EXTRACT_MANIFEST_PATH="${EXTRACT_MANIFEST_PATH:-${CHPC_SCRATCH_BASE}/sae_output/manifests/${RAW_AUDIO_DIR_SLUG}.txt}"
 REBUILD_EXTRACT_MANIFEST="${REBUILD_EXTRACT_MANIFEST:-0}"
 
 build_audio_manifest() {
@@ -145,6 +146,7 @@ if [[ -n "$EXTRACT_RUN_NAME" ]]; then
   echo "  run label: $EXTRACT_RUN_NAME"
 fi
 echo "  decoder layers: $EXTRACT_LAYERS"
+echo "  max duration sec: ${EXTRACT_MAX_DURATION_SEC:-0} (0 means full track)"
 echo "  device override: ${EXTRACT_DEVICE:-auto}"
 
 export CHPC_UID CHPC_SCRATCH_BASE RAW_AUDIO_DIR SCRATCH_FEATURES_DIR
