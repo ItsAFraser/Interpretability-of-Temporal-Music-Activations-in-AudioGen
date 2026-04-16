@@ -40,6 +40,8 @@ fi
 
 TOTAL_FILES="${TOTAL_FILES:-1024}"
 CHUNK_SIZE="${CHUNK_SIZE:-128}"
+EXTRACT_CHUNK_SIZE="${EXTRACT_CHUNK_SIZE:-$CHUNK_SIZE}"
+EXTRACT_MAX_FILES="${EXTRACT_MAX_FILES:-0}"
 
 if [[ "$TOTAL_FILES" != "all" ]] && { ! [[ "$TOTAL_FILES" =~ ^[0-9]+$ ]] || [[ "$TOTAL_FILES" -le 0 ]]; }; then
   echo "Error: TOTAL_FILES must be a positive integer, got '$TOTAL_FILES'" >&2
@@ -48,6 +50,16 @@ fi
 
 if ! [[ "$CHUNK_SIZE" =~ ^[0-9]+$ ]] || [[ "$CHUNK_SIZE" -le 0 ]]; then
   echo "Error: CHUNK_SIZE must be a positive integer, got '$CHUNK_SIZE'" >&2
+  exit 1
+fi
+
+if ! [[ "$EXTRACT_CHUNK_SIZE" =~ ^[0-9]+$ ]] || [[ "$EXTRACT_CHUNK_SIZE" -le 0 ]]; then
+  echo "Error: EXTRACT_CHUNK_SIZE must be a positive integer, got '$EXTRACT_CHUNK_SIZE'" >&2
+  exit 1
+fi
+
+if ! [[ "$EXTRACT_MAX_FILES" =~ ^[0-9]+$ ]] || [[ "$EXTRACT_MAX_FILES" -lt 0 ]]; then
+  echo "Error: EXTRACT_MAX_FILES must be a non-negative integer, got '$EXTRACT_MAX_FILES'" >&2
   exit 1
 fi
 
@@ -147,6 +159,8 @@ if [[ -n "$EXTRACT_RUN_NAME" ]]; then
 fi
 echo "  decoder layers: $EXTRACT_LAYERS"
 echo "  max duration sec: ${EXTRACT_MAX_DURATION_SEC:-0} (0 means full track)"
+echo "  extract chunk size passed to jobs: $EXTRACT_CHUNK_SIZE"
+echo "  extract max files passed to jobs: $EXTRACT_MAX_FILES"
 echo "  device override: ${EXTRACT_DEVICE:-auto}"
 
 export CHPC_UID CHPC_SCRATCH_BASE RAW_AUDIO_DIR SCRATCH_FEATURES_DIR
